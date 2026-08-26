@@ -1,0 +1,83 @@
+/* NEON BREAKER — 레이아웃은 캔버스 한 장을 화면에 꽉 맞추는 것만 담당한다. */
+
+:root {
+  --bg: #05060f;
+  --ink: #9fb3d9;
+  --accent: #35e0ff;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif;
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px;
+  /* 화면 밖 배경까지 이어지는 은은한 네온 글로우 */
+  background:
+    radial-gradient(ellipse 60% 45% at 50% 0%, #14224a 0%, transparent 70%),
+    radial-gradient(ellipse 70% 50% at 50% 100%, #2a0f3d 0%, transparent 70%),
+    var(--bg);
+}
+
+#stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#screen {
+  display: block;
+  height: 100%;
+  width: auto;
+  max-width: 100%;
+  aspect-ratio: 640 / 760;
+  border-radius: 14px;
+  background: #05060f;
+  box-shadow:
+    0 0 0 1px rgba(53, 224, 255, 0.25),
+    0 0 60px rgba(53, 224, 255, 0.12),
+    0 24px 60px rgba(0, 0, 0, 0.6);
+  cursor: none;
+  touch-action: none;
+}
+
+#hint {
+  flex: 0 0 auto;
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  opacity: 0.6;
+  text-align: center;
+}
+
+kbd {
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  border: 1px solid rgba(159, 179, 217, 0.35);
+  background: rgba(159, 179, 217, 0.08);
+}
+
+/* 세로가 짧은 화면(가로 모드 휴대폰 등)에서는 힌트를 숨겨 캔버스를 최대로 */
+@media (max-height: 520px) {
+  #hint { display: none; }
+  body { padding: 4px; }
+}

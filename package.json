@@ -1,0 +1,14 @@
+{
+  "name": "neon-breaker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "의존성 없는 캔버스 벽돌깨기. index.html 만 열면 바로 실행된다.",
+  "scripts": {
+    "start": "python3 -m http.server 8080",
+    "test": "node test/levels.test.js",
+    "test:browser": "node test/smoke.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.0"
+  }
+}
