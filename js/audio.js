@@ -15,7 +15,8 @@ NB.Audio = (function () {
     try {
       ctx = new AC();
       master = ctx.createGain();
-      master.gain.value = 0.35;
+      // 오디오 초기화 전에 M 을 눌러 둔 경우가 있으니 현재 muted 상태를 반영한다
+      master.gain.value = muted ? 0 : 0.35;
       master.connect(ctx.destination);
     } catch (e) {
       ctx = null;

@@ -24,11 +24,15 @@
 
     acc += dt;
     var guard = 0;
-    while (acc >= NB.C.STEP && guard++ < 8) {
+    while (acc >= NB.C.STEP && guard < 8) {
+      guard++;
       game.step();
       NB.Input.endFrame();
       acc -= NB.C.STEP;
     }
+    // 8스텝으로도 못 따라잡았으면 밀린 시간은 버린다. 그대로 두면 다음 프레임에
+    // 더 많이 밀리고, 영영 8스텝만 돌면서 슬로모션으로 굳는다.
+    if (guard >= 8) acc = 0;
 
     game.render();
     requestAnimationFrame(frame);

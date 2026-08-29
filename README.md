@@ -102,11 +102,27 @@ npm test
 ```bash
 npm test              # 레벨 데이터 검증 — 의존성 없음
 npm i                 # 브라우저 테스트용 playwright 설치
-npm run test:browser  # 실제 크로미움에서 게임을 돌려 24개 항목 검사
+npm run test:browser  # 정상 경로 24개 항목
+npm run test:stress   # 경계 / 동시성 18개 항목
 ```
 
-브라우저 테스트는 로드 에러, 발사/물리, 공이 벽을 뚫지 않는지, 패들이 벽 안에 갇히는지,
-아이템 9종 전부, 일시정지, 8레벨 클리어 전이, 목숨 소진, 하이스코어 저장까지 확인한다.
+`test/smoke.js` 는 정상 경로를 본다 — 로드 에러, 발사와 물리, 공이 벽을 뚫지 않는지,
+패들이 벽 안에 갇히는지, 아이템 9종, 일시정지, 8레벨 클리어 전이, 목숨 소진, 하이스코어 저장.
 `SHOTS=./shots` 를 붙이면 단계별 스크린샷을 남긴다.
 
+`test/stress.js` 는 경계와 **같은 스텝에 두 사건이 겹치는 경우**를 노린다 — 마지막 벽돌과
+마지막 공이 동시에 사라질 때, 득점 300회 동안의 저장 횟수, 45초 자동 플레이(NaN·관통·
+속도 이상 감시), 아이템 200회 난사, 최고 속도에서의 관통, 무작위 상태 전이, 뷰포트별
+포인터 좌표 정합.
+
 시스템에 설치된 다른 크로미움을 쓰려면 `PW_CHROME=/path/to/chrome` 으로 지정한다.
+
+## 파일 한 장으로 묶기
+
+```bash
+node tools/build-artifact.js               # dist/neon-breaker.html (감싸기용 조각)
+node tools/build-artifact.js --standalone  # dist/neon-breaker-standalone.html (그냥 열면 됨)
+```
+
+`index.html` 이 참조하는 CSS/JS 를 적힌 순서대로 인라인한다. 스크립트 태그 순서가 곧
+의존 순서이므로, 파일을 추가하면 `index.html` 에만 반영하면 빌드가 따라온다.

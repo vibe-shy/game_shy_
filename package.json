@@ -6,7 +6,9 @@
   "scripts": {
     "start": "python3 -m http.server 8080",
     "test": "node test/levels.test.js",
-    "test:browser": "node test/smoke.js"
+    "test:browser": "node test/smoke.js",
+    "test:stress": "node test/stress.js",
+    "build": "node tools/build-artifact.js && node tools/build-artifact.js --standalone"
   },
   "devDependencies": {
     "playwright": "^1.49.0"

@@ -41,6 +41,7 @@ NB.Game = (function () {
     this.ctx = canvas.getContext('2d');
     this.state = STATE.TITLE;
     this.high = loadHigh();
+    this.savedHigh = this.high;
     this.time = 0;
     this.shake = 0;
     this.flash = 0;
@@ -76,6 +77,9 @@ NB.Game = (function () {
   };
 
   Game.prototype.loadLevel = function (i) {
+    // 범위를 벗어난 요청은 잘라낸다. 여기서 undefined 를 그대로 쓰면
+    // lv.map 에서 터지면서 게임 전체가 멈춘다.
+    i = NB.clamp(i | 0, 0, NB.Levels.count - 1);
     var lv = NB.Levels.get(i);
     this.levelIndex = i;
     this.bricks = [];
@@ -126,7 +130,16 @@ NB.Game = (function () {
     if (this.score > this.high) {
       this.high = this.score;
       this.newHigh = true;
+      // 저장은 여기서 하지 않는다. localStorage 쓰기는 동기 디스크 I/O 라
+      // 벽돌마다 부르면 연타 구간에서 프레임이 튄다. 국면이 끝날 때만 넘긴다.
+    }
+  };
+
+  /* 레벨 클리어 / 게임오버처럼 국면이 끝나는 시점에만 기록을 넘긴다. */
+  Game.prototype.persistHigh = function () {
+    if (this.high > this.savedHigh) {
       saveHigh(this.high);
+      this.savedHigh = this.high;
     }
   };
 
@@ -160,8 +173,15 @@ NB.Game = (function () {
 
       case STATE.CLEAR:
         if (this.overlayT > 0.6 && I.confirm()) {
-          this.loadLevel(this.levelIndex + 1);
-          this.state = STATE.PLAYING;
+          if (this.levelIndex + 1 >= NB.Levels.count) {
+            // 정상 흐름에서는 clearLevel 이 이미 WIN 으로 보내므로 오지 않는다.
+            // 그래도 여기서 다음 레벨을 믿고 읽으면 마지막 판에서 터진다.
+            this.state = STATE.WIN;
+            this.overlayT = 0;
+          } else {
+            this.loadLevel(this.levelIndex + 1);
+            this.state = STATE.PLAYING;
+          }
         }
         break;
 
@@ -237,9 +257,11 @@ NB.Game = (function () {
       if (this.bricks[i].flash > 0) this.bricks[i].flash -= 0.08;
     }
 
-    // ---- 목숨 / 클리어 판정
-    if (this.balls.length === 0) this.loseLife();
-    else if (this.bricksLeft() === 0) this.clearLevel();
+    // ---- 클리어 / 목숨 판정
+    // 클리어를 먼저 본다. 마지막 벽돌을 부순 공이 그대로 바닥으로 빠지면
+    // 두 조건이 같은 스텝에 성립하는데, 그때 목숨을 깎는 건 부당하다.
+    if (this.bricksLeft() === 0) this.clearLevel();
+    else if (this.balls.length === 0) this.loseLife();
   };
 
   Game.prototype.stepBalls = function () {
@@ -486,6 +508,7 @@ NB.Game = (function () {
 
     if (this.lives <= 0) {
       A.over();
+      this.persistHigh();
       this.state = STATE.OVER;
       this.overlayT = 0;
       return;
@@ -506,6 +529,7 @@ NB.Game = (function () {
     for (var i = 0; i < 30; i++) {
       P.spawn(Math.random() * C.W, C.HUD_H + Math.random() * 300, '#ffd84d', 3, { speed: 3, life: 40 });
     }
+    this.persistHigh();
     this.state = (this.levelIndex + 1 >= NB.Levels.count) ? STATE.WIN : STATE.CLEAR;
   };
 
@@ -871,6 +895,7 @@ NB.Game = (function () {
         break;
 
       case STATE.CLEAR:
+        var next = NB.Levels.get(this.levelIndex + 1);
         title = 'LEVEL ' + (this.levelIndex + 1) + ' CLEAR';
         color = '#5dff9b';
         lines = [
@@ -878,7 +903,7 @@ NB.Game = (function () {
           '클리어 보너스  +' + this.levelBonus,
           '남은 목숨 ' + this.lives + '개',
           '',
-          '다음: ' + NB.Levels.get(this.levelIndex + 1).name
+          next ? '다음: ' + next.name : ''
         ];
         hint = 'Space / 터치 로 계속';
         break;
