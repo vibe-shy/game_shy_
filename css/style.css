@@ -1,9 +1,10 @@
-/* NEON BREAKER — 레이아웃은 캔버스 한 장을 화면에 꽉 맞추는 것만 담당한다. */
+/* ARROWFALL — 레이아웃은 캔버스 한 장을 화면에 맞추는 것만 담당한다.
+   게임 화면은 전부 캔버스가 그린다. */
 
 :root {
-  --bg: #05060f;
-  --ink: #9fb3d9;
-  --accent: #35e0ff;
+  --bg: #14121c;
+  --ink: #b8a99a;
+  --accent: #ffb347;
 }
 
 * { box-sizing: border-box; }
@@ -26,10 +27,10 @@ body {
   justify-content: center;
   gap: 10px;
   padding: 10px;
-  /* 화면 밖 배경까지 이어지는 은은한 네온 글로우 */
+  /* 화면 밖까지 이어지는 횃불빛 */
   background:
-    radial-gradient(ellipse 60% 45% at 50% 0%, #14224a 0%, transparent 70%),
-    radial-gradient(ellipse 70% 50% at 50% 100%, #2a0f3d 0%, transparent 70%),
+    radial-gradient(ellipse 55% 40% at 50% 0%, #3a2418 0%, transparent 72%),
+    radial-gradient(ellipse 65% 45% at 50% 100%, #241a33 0%, transparent 72%),
     var(--bg);
 }
 
@@ -47,14 +48,14 @@ body {
   height: 100%;
   width: auto;
   max-width: 100%;
-  aspect-ratio: 640 / 760;
+  aspect-ratio: 700 / 772;
   border-radius: 14px;
-  background: #05060f;
+  background: #14121c;
   box-shadow:
-    0 0 0 1px rgba(53, 224, 255, 0.25),
-    0 0 60px rgba(53, 224, 255, 0.12),
-    0 24px 60px rgba(0, 0, 0, 0.6);
-  cursor: none;
+    0 0 0 1px rgba(255, 179, 71, 0.22),
+    0 0 70px rgba(255, 140, 60, 0.10),
+    0 24px 60px rgba(0, 0, 0, 0.65);
+  cursor: crosshair;
   touch-action: none;
 }
 
@@ -67,17 +68,18 @@ body {
   text-align: center;
 }
 
+#hint b { color: var(--accent); font-weight: 600; }
+
 kbd {
   font: inherit;
   font-size: 11px;
   padding: 1px 6px;
   border-radius: 5px;
-  border: 1px solid rgba(159, 179, 217, 0.35);
-  background: rgba(159, 179, 217, 0.08);
+  border: 1px solid rgba(184, 169, 154, 0.35);
+  background: rgba(184, 169, 154, 0.08);
 }
 
-/* 세로가 짧은 화면(가로 모드 휴대폰 등)에서는 힌트를 숨겨 캔버스를 최대로 */
-@media (max-height: 520px) {
+@media (max-height: 560px) {
   #hint { display: none; }
   body { padding: 4px; }
 }

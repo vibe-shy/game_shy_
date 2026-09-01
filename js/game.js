@@ -1,165 +1,246 @@
-/* 게임 본체: 상태 기계 + 고정 스텝 물리 + 렌더링. */
-var NB = window.NB || (window.NB = {});
+/* 게임 본체: 상태 기계 · 방 진행 · 충돌 · 렌더링. */
+var AF = window.AF || (window.AF = {});
 
-NB.Game = (function () {
-  var C = NB.C;
-  var P = NB.Particles;
-  var A = NB.Audio;
-  var I = NB.Input;
+AF.Game = (function () {
+  var C = AF.C, P = AF.Particles, A = AF.Audio, I = AF.Input, COL = AF.COLOR;
+  var rr = AF.rr, pad = AF.pad;
 
   var STATE = {
     TITLE: 'TITLE',
     PLAYING: 'PLAYING',
     PAUSED: 'PAUSED',
-    CLEAR: 'CLEAR',
-    OVER: 'OVER',
-    WIN: 'WIN'
+    UPGRADE: 'UPGRADE',
+    DEAD: 'DEAD'
   };
 
-  var HIGH_KEY = 'nb_high_v1';
+  var BEST_KEY = 'af_best_v1';
+  var MODE_KEY = 'af_mode_v1';
 
-  function loadHigh() {
-    try { return parseInt(localStorage.getItem(HIGH_KEY), 10) || 0; } catch (e) { return 0; }
-  }
-  function saveHigh(v) {
-    try { localStorage.setItem(HIGH_KEY, String(v)); } catch (e) { /* 사생활 보호 모드 등 — 무시 */ }
-  }
-
-  function rr(ctx, x, y, w, h, r) {
-    r = Math.min(r, w / 2, h / 2);
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.arcTo(x + w, y, x + w, y + h, r);
-    ctx.arcTo(x + w, y + h, x, y + h, r);
-    ctx.arcTo(x, y + h, x, y, r);
-    ctx.arcTo(x, y, x + w, y, r);
-    ctx.closePath();
-  }
+  function load(k, dflt) { try { var v = localStorage.getItem(k); return v === null ? dflt : v; } catch (e) { return dflt; } }
+  function save(k, v) { try { localStorage.setItem(k, String(v)); } catch (e) { /* 사생활 보호 모드 */ } }
 
   function Game(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.state = STATE.TITLE;
-    this.high = loadHigh();
-    this.savedHigh = this.high;
+
+    this.best = parseInt(load(BEST_KEY, '0'), 10) || 0;
+    this.savedBest = this.best;
+    this.mode = load(MODE_KEY, 'auto') === 'manual' ? 'manual' : 'auto';
+
     this.time = 0;
     this.shake = 0;
     this.flash = 0;
     this.flashColor = '#ffffff';
-    this.aimX = C.W / 2;
-    this.paddle = new NB.Paddle();
-    this.bricks = [];
-    this.balls = [];
-    this.powerups = [];
-    this.lasers = [];
-    this.timers = {};
+
+    this.player = new AF.Player(C.X0 + C.SIZE / 2, C.Y1 - 90);
+    this.enemies = [];
+    this.shots = [];
+    this.obstacles = [];
+    this.taken = {};          // 능력 id -> 중첩 수
+    this.takenOrder = [];
+    this.choices = [];
+    this.room = 0;
     this.score = 0;
-    this.lives = C.LIVES;
-    this.levelIndex = 0;
-    this.combo = 0;
-    this.laserCd = 0;
+    this.kills = 0;
+    this.plan = { hpMul: 1, dmgMul: 1 };
     this.overlayT = 0;
-    this.levelBonus = 0;
-    this.newHigh = false;
-    this.loadLevel(0);   // 타이틀 화면 배경으로 1레벨을 미리 깔아 둔다
+    this.introT = 0;
+    this.newBest = false;
+
+    this.buildRoom(0);        // 타이틀 뒤에 깔 배경
   }
 
-  // ------------------------------------------------------------ 흐름 제어
+  // ------------------------------------------------------------- 실행 흐름
 
-  Game.prototype.newGame = function () {
+  Game.prototype.newRun = function () {
+    this.player = new AF.Player(C.X0 + C.SIZE / 2, C.Y1 - 90);
+    this.enemies = [];
+    this.shots = [];
+    this.taken = {};
+    this.takenOrder = [];
+    this.room = 0;
     this.score = 0;
-    this.lives = C.LIVES;
-    this.levelIndex = 0;
-    this.newHigh = false;
+    this.kills = 0;
+    this.newBest = false;
     P.clear();
-    this.loadLevel(0);
+    this.nextRoom();
     this.state = STATE.PLAYING;
   };
 
-  Game.prototype.loadLevel = function (i) {
-    // 범위를 벗어난 요청은 잘라낸다. 여기서 undefined 를 그대로 쓰면
-    // lv.map 에서 터지면서 게임 전체가 멈춘다.
-    i = NB.clamp(i | 0, 0, NB.Levels.count - 1);
-    var lv = NB.Levels.get(i);
-    this.levelIndex = i;
-    this.bricks = [];
-    for (var r = 0; r < lv.map.length; r++) {
-      var row = lv.map[r];
-      for (var c = 0; c < row.length; c++) {
-        if (row[c] === '.') continue;
-        this.bricks.push(new NB.Brick(c, r, row[c]));
+  Game.prototype.nextRoom = function () {
+    this.room++;
+    this.plan = AF.roomPlan(this.room);
+    var layout = this.plan.isBoss ? AF.BOSS_ROOM : (this.room - 1) % (AF.ROOMS.length - 1);
+    this.buildRoom(layout);
+
+    this.shots = [];
+    this.enemies = [];
+    this.player.x = C.X0 + C.SIZE / 2;
+    this.player.y = C.Y1 - 90;
+    this.player.inv = 1.0;                    // 입장 직후 잠깐 무적
+    this.introT = 1.1;
+
+    this.spawnWave();
+    if (this.plan.isBoss) A.bossIn();
+  };
+
+  Game.prototype.buildRoom = function (idx) {
+    var map = AF.ROOMS[idx];
+    this.obstacles = [];
+    this.blocked = new Uint8Array(C.GRID * C.GRID);
+    for (var r = 0; r < map.length; r++) {
+      for (var c = 0; c < map[r].length; c++) {
+        if (map[r][c] !== '#') continue;
+        this.obstacles.push({
+          x: C.X0 + c * C.CELL, y: C.Y0 + r * C.CELL, w: C.CELL, h: C.CELL
+        });
+        this.blocked[r * C.GRID + c] = 1;
       }
     }
-    this.baseSpeed = lv.speed;
-    this.powerups = [];
-    this.lasers = [];
-    this.timers = {};
-    this.combo = 0;
-    this.paddle = new NB.Paddle();
-    this.aimX = C.W / 2;
-    this.resetBall();
-    this.overlayT = 0;
+    this.flow = null;
+    this.flowT = 0;
+    this.flowCell = -1;
   };
 
-  /* 공을 패들 위에 올려 두고 발사 대기 상태로. */
-  Game.prototype.resetBall = function () {
-    this.balls = [];
-    var b = new NB.Ball(this.paddle.cx(), C.PADDLE_Y - C.BALL_R - 2, this.ballSpeed(), 0);
-    b.stuck = true;
-    b.stickOffset = 0;
-    this.balls.push(b);
+  Game.prototype.cellOf = function (x, y) {
+    var c = AF.clamp(Math.floor((x - C.X0) / C.CELL), 0, C.GRID - 1);
+    var r = AF.clamp(Math.floor((y - C.Y0) / C.CELL), 0, C.GRID - 1);
+    return r * C.GRID + c;
   };
 
-  Game.prototype.ballSpeed = function () {
-    var s = this.baseSpeed || 6;
-    if (this.timers.SLOW > 0) s *= 0.72;
-    if (this.timers.FAST > 0) s *= 1.28;
-    return s;
-  };
+  /* 플레이어 칸에서 너비 우선 탐색으로 거리장을 만든다.
+     국소 조향만으로는 폭이 넓은 벽을 돌아갈 수 없어 적이 벽에 붙어 멈춘다.
+     격자가 12x12(144칸)뿐이라 매번 새로 구해도 부담이 없다. */
+  Game.prototype.updateFlow = function () {
+    var G = C.GRID, n = G * G;
+    var start = this.cellOf(this.player.x, this.player.y);
+    // 플레이어가 같은 칸에 있고 얼마 지나지 않았으면 재사용한다
+    if (this.flow && this.flowCell === start && this.flowT > 0) { this.flowT -= C.STEP; return; }
 
-  Game.prototype.bricksLeft = function () {
-    var n = 0;
-    for (var i = 0; i < this.bricks.length; i++) {
-      if (this.bricks[i].alive && !this.bricks[i].solid) n++;
+    var dist = this.flow && this.flow.length === n ? this.flow : new Int16Array(n);
+    dist.fill(-1);
+    var queue = new Int16Array(n);
+    var head = 0, tail = 0;
+    dist[start] = 0;
+    queue[tail++] = start;
+
+    while (head < tail) {
+      var cur = queue[head++];
+      var cr = (cur / G) | 0, cc = cur % G;
+      var d = dist[cur] + 1;
+      for (var k = 0; k < 4; k++) {
+        var nr = cr + (k === 0 ? -1 : k === 1 ? 1 : 0);
+        var nc = cc + (k === 2 ? -1 : k === 3 ? 1 : 0);
+        if (nr < 0 || nr >= G || nc < 0 || nc >= G) continue;
+        var ni = nr * G + nc;
+        if (this.blocked[ni] || dist[ni] !== -1) continue;
+        dist[ni] = d;
+        queue[tail++] = ni;
+      }
     }
-    return n;
+    this.flow = dist;
+    this.flowCell = start;
+    this.flowT = 0.15;
+  };
+
+  /* 적이 나아갈 방향.
+     플레이어가 보이면 그냥 직진한다(격자를 따라가면 움직임이 각져 보인다).
+     안 보이면 거리장을 따라 내려간다. */
+  Game.prototype.flowDir = function (e) {
+    var p = this.player;
+    if (e.canSee || !this.flow) {
+      var dx = p.x - e.x, dy = p.y - e.y;
+      var d = Math.hypot(dx, dy) || 1;
+      return { x: dx / d, y: dy / d };
+    }
+    var G = C.GRID;
+    var cur = this.cellOf(e.x, e.y);
+    var cr = (cur / G) | 0, cc = cur % G;
+    var best = -1, bd = this.flow[cur] >= 0 ? this.flow[cur] : 1e9;
+
+    for (var dr = -1; dr <= 1; dr++) {
+      for (var dc = -1; dc <= 1; dc++) {
+        if (!dr && !dc) continue;
+        var nr = cr + dr, nc = cc + dc;
+        if (nr < 0 || nr >= G || nc < 0 || nc >= G) continue;
+        var ni = nr * G + nc;
+        if (this.blocked[ni] || this.flow[ni] < 0) continue;
+        // 대각선은 양옆이 다 뚫려 있을 때만 (모서리를 파고들지 않도록)
+        if (dr && dc && (this.blocked[cr * G + nc] || this.blocked[nr * G + cc])) continue;
+        if (this.flow[ni] < bd) { bd = this.flow[ni]; best = ni; }
+      }
+    }
+    if (best < 0) {
+      var ex = p.x - e.x, ey = p.y - e.y;
+      var el = Math.hypot(ex, ey) || 1;
+      return { x: ex / el, y: ey / el };
+    }
+    var tx = C.X0 + (best % G) * C.CELL + C.CELL / 2;
+    var ty = C.Y0 + (((best / G) | 0)) * C.CELL + C.CELL / 2;
+    var vx = tx - e.x, vy = ty - e.y;
+    var vl = Math.hypot(vx, vy) || 1;
+    return { x: vx / vl, y: vy / vl };
+  };
+
+  /* 적은 플레이어에게서 충분히 떨어지고 엄폐물과 겹치지 않는 자리에 놓는다. */
+  Game.prototype.findSpawn = function (radius) {
+    var p = this.player;
+    for (var tries = 0; tries < 120; tries++) {
+      var x = AF.rand(C.X0 + radius + 8, C.X1 - radius - 8);
+      var y = AF.rand(C.Y0 + radius + 8, C.Y1 - radius - 8);
+      if (AF.dist2(x, y, p.x, p.y) < 210 * 210) continue;
+      var blocked = false;
+      for (var i = 0; i < this.obstacles.length; i++) {
+        var o = this.obstacles[i];
+        if (AF.circleRect(x, y, radius + 6, o.x, o.y, o.w, o.h)) { blocked = true; break; }
+      }
+      if (!blocked) return { x: x, y: y };
+    }
+    return { x: C.X0 + C.SIZE / 2, y: C.Y0 + 90 };   // 최후의 수단
+  };
+
+  Game.prototype.spawnWave = function () {
+    for (var i = 0; i < this.plan.spawns.length; i++) {
+      var type = this.plan.spawns[i][0];
+      var def = AF.ENEMIES[type];
+      var pos = this.findSpawn(def.r);
+      var e = new AF.Enemy(type, pos.x, pos.y, this.plan.hpMul, this.plan.dmgMul);
+      this.enemies.push(e);
+      P.spawn(pos.x, pos.y, def.color, 12, { speed: 2.6, life: 24 });
+    }
   };
 
   Game.prototype.addScore = function (n) {
     this.score += n;
-    if (this.score > this.high) {
-      this.high = this.score;
-      this.newHigh = true;
-      // 저장은 여기서 하지 않는다. localStorage 쓰기는 동기 디스크 I/O 라
-      // 벽돌마다 부르면 연타 구간에서 프레임이 튄다. 국면이 끝날 때만 넘긴다.
-    }
+    if (this.score > this.best) { this.best = this.score; this.newBest = true; }
   };
 
-  /* 레벨 클리어 / 게임오버처럼 국면이 끝나는 시점에만 기록을 넘긴다. */
-  Game.prototype.persistHigh = function () {
-    if (this.high > this.savedHigh) {
-      saveHigh(this.high);
-      this.savedHigh = this.high;
-    }
+  Game.prototype.persistBest = function () {
+    if (this.best > this.savedBest) { save(BEST_KEY, this.best); this.savedBest = this.best; }
   };
 
-  Game.prototype.comboMult = function () {
-    return Math.min(1 + this.combo * 0.2, 5);
-  };
-
-  // -------------------------------------------------------------- 업데이트
+  // ------------------------------------------------------------- 업데이트
 
   Game.prototype.step = function () {
     this.time += C.STEP;
-    if (this.shake > 0) this.shake *= 0.88;
-    if (this.flash > 0) this.flash -= 0.06;
+    if (this.shake > 0.2) this.shake *= 0.86; else this.shake = 0;
+    if (this.flash > 0) this.flash -= 0.05;
     this.overlayT += C.STEP;
 
     if (I.hit('KeyM')) A.toggleMute();
 
     switch (this.state) {
       case STATE.TITLE:
-        if (I.confirm()) { A.launch(); this.newGame(); }
+        // 좌우로 모드 전환, 확인으로 시작
+        if (I.hit('ArrowLeft') || I.hit('KeyA')) this.setMode('auto');
+        if (I.hit('ArrowRight') || I.hit('KeyD')) this.setMode('manual');
+        if (I.pointer.tapped) {
+          var half = I.pointer.y > C.Y0 + 250 && I.pointer.y < C.Y0 + 350;
+          if (half) { this.setMode(I.pointer.x < C.W / 2 ? 'auto' : 'manual'); break; }
+        }
+        if (I.hit('Space') || I.hit('Enter') ||
+            (I.pointer.tapped && I.pointer.y > C.Y0 + 380)) { this.newRun(); }
         break;
 
       case STATE.PLAYING:
@@ -171,366 +252,338 @@ NB.Game = (function () {
         if (I.hit('KeyP') || I.hit('Escape') || I.confirm()) this.state = STATE.PLAYING;
         break;
 
-      case STATE.CLEAR:
-        if (this.overlayT > 0.6 && I.confirm()) {
-          if (this.levelIndex + 1 >= NB.Levels.count) {
-            // 정상 흐름에서는 clearLevel 이 이미 WIN 으로 보내므로 오지 않는다.
-            // 그래도 여기서 다음 레벨을 믿고 읽으면 마지막 판에서 터진다.
-            this.state = STATE.WIN;
-            this.overlayT = 0;
-          } else {
-            this.loadLevel(this.levelIndex + 1);
-            this.state = STATE.PLAYING;
-          }
-        }
+      case STATE.UPGRADE:
+        this.stepUpgrade();
         break;
 
-      case STATE.OVER:
-      case STATE.WIN:
-        if (this.overlayT > 0.9 && I.confirm()) this.state = STATE.TITLE;
+      case STATE.DEAD:
+        if (this.overlayT > 0.8 && I.confirm()) { this.state = STATE.TITLE; this.buildRoom(0); }
         break;
     }
 
     P.update();
   };
 
+  Game.prototype.setMode = function (m) {
+    if (this.mode === m) return;
+    this.mode = m;
+    save(MODE_KEY, m);
+    A.pickup();
+  };
+
   Game.prototype.stepPlay = function () {
-    var i;
+    var p = this.player, s = p.stats, i;
+    if (this.introT > 0) this.introT -= C.STEP;
+    if (p.inv > 0) p.inv -= C.STEP;
+    if (p.hurtFlash > 0) p.hurtFlash -= 0.06;
+    if (p.fireT > 0) p.fireT -= C.STEP;
 
-    // 파워업 지속시간
-    for (var k in this.timers) {
-      if (this.timers[k] > 0) {
-        this.timers[k] -= C.STEP;
-        if (this.timers[k] <= 0) this.onPowerExpire(k);
+    // ---- 이동
+    var mv = I.moveVec();
+    var moving = mv.len > 0.15;
+    p.x += mv.x * s.moveSpeed;
+    p.y += mv.y * s.moveSpeed;
+    AF.collideWorld(p, this.obstacles);
+    if (moving) { p.stillT = 0; p.walkT += C.STEP; } else { p.stillT += C.STEP; }
+
+    // ---- 조준과 발사: 모드가 여기서 갈린다
+    var wantFire = false;
+    if (this.mode === 'auto') {
+      // 궁수의 전설식 — 멈춰 있을 때만 쏜다.
+      // 대상은 "사선이 트인" 가장 가까운 적. 벽 뒤를 겨누면 화살이 전부 엄폐물에 박힌다.
+      if (p.targetT > 0) p.targetT -= C.STEP;
+      var t = this.autoTarget(p);
+      if (t) p.aim = this.leadAim(p, t);
+      else if (moving) p.aim = Math.atan2(mv.y, mv.x);
+      wantFire = !moving && !!t;
+    } else {
+      // 브롤스타즈식 — 움직이면서도 쏜다. 마우스 또는 오른쪽 스틱으로 조준.
+      if (I.aimStick.active && (I.aimStick.dx || I.aimStick.dy)) {
+        p.aim = Math.atan2(I.aimStick.dy, I.aimStick.dx);
+        wantFire = true;
+      } else if (I.pointer.active) {
+        p.aim = Math.atan2(I.pointer.y - p.y, I.pointer.x - p.x);
+        wantFire = I.pointer.down || I.held('Space');
+      }
+      if (I.held('Space')) wantFire = true;
+    }
+
+    if (wantFire && p.fireT <= 0 && this.enemies.length > 0) {
+      this.fire();
+      p.fireT = s.fireCd;
+    }
+
+    // ---- 투사체
+    for (i = this.shots.length - 1; i >= 0; i--) {
+      var sh = this.shots[i];
+      sh.step(this);
+      if (!sh.dead) this.hitCheck(sh);
+      if (sh.dead) this.shots.splice(i, 1);
+    }
+
+    // ---- 적
+    this.updateFlow();
+    for (i = this.enemies.length - 1; i >= 0; i--) {
+      var e = this.enemies[i];
+      if (e.dead) { this.enemies.splice(i, 1); continue; }
+      e.step(this);
+      // 접촉 피해
+      if (AF.dist2(e.x, e.y, p.x, p.y) < (e.r + p.r) * (e.r + p.r)) {
+        p.hurt(e.def.contact * e.dmgMul, this);
       }
     }
 
-    // ---- 패들 조작: 포인터가 살아 있으면 포인터, 아니면 방향키
-    var axis = I.axis();
-    if (axis !== 0) {
-      this.aimX += axis * C.PADDLE_KEY_SPEED;
-    } else if (I.pointer.active) {
-      this.aimX = I.pointer.x;
-    }
-    this.aimX = NB.clamp(this.aimX, 0, C.W);
-    this.paddle.targetW = NB.clamp(
-      C.PADDLE_W * (this.timers.EXPAND > 0 ? 1.55 : 1) * (this.timers.SHRINK > 0 ? 0.62 : 1),
-      C.PADDLE_MIN, C.PADDLE_MAX
-    );
-    this.paddle.update(this.aimX);
+    // ---- 적끼리 겹치지 않게 살짝 밀어낸다 (한 점에 뭉쳐 보이는 것 방지)
+    this.separate();
 
-    // ---- 발사 / 레이저 (Space, 또는 화면 탭)
-    var fireKey = I.hit('Space') || I.pointer.tapped;
-    var anyStuck = false;
-    for (i = 0; i < this.balls.length; i++) if (this.balls[i].stuck) anyStuck = true;
+    if (!p.alive()) return;
 
-    if (fireKey && anyStuck) {
-      for (i = 0; i < this.balls.length; i++) {
-        var b = this.balls[i];
-        if (!b.stuck) continue;
-        b.stuck = false;
-        // 패들 위 어디에 붙어 있었는지에 따라 발사 각도가 갈린다.
-        var rel = NB.clamp(b.stickOffset / (this.paddle.w / 2), -1, 1);
-        var ang = rel * C.BALL_MAX_ANGLE * 0.8;
-        var sp = this.ballSpeed();
-        b.speed = sp;
-        b.vx = Math.sin(ang) * sp;
-        b.vy = -Math.cos(ang) * sp;
-        b.unvertical();
-      }
-      A.launch();
-    }
-
-    if (this.laserCd > 0) this.laserCd -= C.STEP;
-    if (this.timers.LASER > 0 && (I.held('Space') || I.pointer.down) && !anyStuck && this.laserCd <= 0) {
-      this.lasers.push(new NB.Laser(this.paddle.x + 6, this.paddle.y));
-      this.lasers.push(new NB.Laser(this.paddle.x + this.paddle.w - 6, this.paddle.y));
-      this.laserCd = 0.17;
-      A.laser();
-    }
-
-    this.stepBalls();
-    this.stepLasers();
-    this.stepPowerups();
-
-    for (i = 0; i < this.bricks.length; i++) {
-      if (this.bricks[i].flash > 0) this.bricks[i].flash -= 0.08;
-    }
-
-    // ---- 클리어 / 목숨 판정
-    // 클리어를 먼저 본다. 마지막 벽돌을 부순 공이 그대로 바닥으로 빠지면
-    // 두 조건이 같은 스텝에 성립하는데, 그때 목숨을 깎는 건 부당하다.
-    if (this.bricksLeft() === 0) this.clearLevel();
-    else if (this.balls.length === 0) this.loseLife();
+    if (this.enemies.length === 0 && this.introT <= 0) this.roomClear();
   };
 
-  Game.prototype.stepBalls = function () {
-    var speed = this.ballSpeed();
-
-    for (var i = this.balls.length - 1; i >= 0; i--) {
-      var b = this.balls[i];
-
-      if (b.stuck) {
-        b.x = NB.clamp(this.paddle.cx() + b.stickOffset, this.paddle.x + b.r, this.paddle.x + this.paddle.w - b.r);
-        b.y = this.paddle.y - b.r - 2;
-        b.pushTrail();
-        continue;
-      }
-
-      if (Math.abs(b.speed - speed) > 0.01) b.setSpeed(speed);
-
-      // 한 스텝의 이동을 잘게 쪼갠다. 빠른 공이 벽돌을 뚫고 지나가는 걸 막는 가장 싼 방법.
-      var sub = Math.max(1, Math.ceil(b.speed / (b.r * 0.8)));
-      for (var s = 0; s < sub; s++) {
-        b.x += b.vx / sub;
-        b.y += b.vy / sub;
-        this.collideWalls(b);
-        this.collideBricks(b);
-        this.collidePaddle(b);
-      }
-      b.unflatten();
-      b.pushTrail();
-
-      if (b.y - b.r > C.H) {
-        P.spawn(b.x, C.H - 6, '#ff5470', 14, { dir: -Math.PI / 2, spread: 1.6, speed: 3.6 });
-        this.balls.splice(i, 1);
+  Game.prototype.separate = function () {
+    var es = this.enemies;
+    for (var i = 0; i < es.length; i++) {
+      for (var j = i + 1; j < es.length; j++) {
+        var a = es[i], b = es[j];
+        var dx = b.x - a.x, dy = b.y - a.y;
+        var min = a.r + b.r;
+        var d2 = dx * dx + dy * dy;
+        if (d2 >= min * min || d2 < 0.001) continue;
+        var d = Math.sqrt(d2);
+        var push = (min - d) * 0.5;
+        var nx = dx / d, ny = dy / d;
+        a.x -= nx * push; a.y -= ny * push;
+        b.x += nx * push; b.y += ny * push;
       }
     }
   };
 
-  Game.prototype.collideWalls = function (b) {
-    var hit = false;
-    if (b.x - b.r < C.WALL) { b.x = C.WALL + b.r; b.vx = Math.abs(b.vx); hit = true; }
-    if (b.x + b.r > C.W - C.WALL) { b.x = C.W - C.WALL - b.r; b.vx = -Math.abs(b.vx); hit = true; }
-    if (b.y - b.r < C.HUD_H) { b.y = C.HUD_H + b.r; b.vy = Math.abs(b.vy); hit = true; }
-    if (hit) {
-      A.wall();
-      P.spawn(b.x, b.y, '#6fd7ff', 3, { speed: 1.6, life: 14, gravity: 0.02 });
-    }
-  };
+  Game.prototype.fire = function () {
+    var p = this.player, s = p.stats;
+    var modeMul = this.mode === 'auto' ? 1.15 : 1.0;   // 멈춰야 쏘는 위험에 대한 보상
 
-  Game.prototype.collideBricks = function (b) {
-    for (var i = 0; i < this.bricks.length; i++) {
-      var br = this.bricks[i];
-      if (!br.alive) continue;
+    var angles = [];
+    var n = s.multishot;
+    for (var i = 0; i < n; i++) angles.push(p.aim + (i - (n - 1) / 2) * 0.20);
+    if (s.rearShot) angles.push(p.aim + Math.PI);
+    if (s.sideShot) { angles.push(p.aim + Math.PI / 2); angles.push(p.aim - Math.PI / 2); }
 
-      var hit = NB.circleRect(b.x, b.y, b.r, br.x, br.y, br.w, br.h);
-      if (!hit) continue;
-
-      b.x += hit.nx * hit.depth;
-      b.y += hit.ny * hit.depth;
-      var dot = b.vx * hit.nx + b.vy * hit.ny;
-      if (dot < 0) {
-        b.vx -= 2 * dot * hit.nx;
-        b.vy -= 2 * dot * hit.ny;
-      }
-      this.damageBrick(br, b.x, b.y);
-      return;   // 한 스텝에 벽돌 하나만 — 모서리에서 두 번 튕기는 걸 방지
-    }
-  };
-
-  Game.prototype.damageBrick = function (br, hx, hy) {
-    var cols = br.colors();
-
-    if (br.solid) {
-      br.flash = 1;
-      A.solid();
-      P.spawn(hx, hy, '#9fb3d9', 4, { speed: 2, life: 14 });
-      return;
-    }
-
-    br.hp--;
-    br.flash = 1;
-
-    if (br.hp > 0) {
-      A.hard();
-      P.spawn(hx, hy, cols[0], 5, { speed: 2.2, life: 16 });
-      this.addScore(10);
-      return;
-    }
-
-    br.alive = false;
-    this.combo++;
-    A.brick(this.combo);
-    this.shake = Math.min(this.shake + 2.2, 12);
-
-    var pts = Math.round(br.points() * this.comboMult());
-    this.addScore(pts);
-    P.spawn(br.x + br.w / 2, br.y + br.h / 2, cols[0], 16, { speed: 3.4, life: 30 });
-    P.spawn(br.x + br.w / 2, br.y + br.h / 2, '#ffffff', 5, { speed: 4.2, life: 18 });
-    P.float(br.x + br.w / 2, br.y + br.h / 2, '+' + pts, cols[0]);
-
-    if (br.forcePower || Math.random() < C.DROP_CHANCE) {
-      this.powerups.push(new NB.PowerUp(br.x + br.w / 2 - 20, br.y + br.h / 2 - 10, NB.rollPower()));
-    }
-  };
-
-  Game.prototype.collidePaddle = function (b) {
-    var p = this.paddle;
-    if (b.vy < 0) return;                       // 올라가는 중이면 통과 (패들 안쪽에서 끼는 것 방지)
-    var hit = NB.circleRect(b.x, b.y, b.r, p.x, p.y, p.w, p.h);
-    if (!hit) return;
-
-    b.y = p.y - b.r - 0.5;
-    this.combo = 0;
-
-    if (this.timers.STICKY > 0) {
-      b.stuck = true;
-      b.stickOffset = NB.clamp(b.x - p.cx(), -p.w / 2 + b.r, p.w / 2 - b.r);
-      A.paddle();
-      return;
-    }
-
-    var rel = NB.clamp((b.x - p.cx()) / (p.w / 2), -1, 1);
-    var ang = rel * C.BALL_MAX_ANGLE;
-    var sp = this.ballSpeed();
-    b.speed = sp;
-    b.vx = Math.sin(ang) * sp + p.vx * 0.22;    // 패들을 밀면서 받으면 그만큼 옆으로 실린다
-    b.vy = -Math.abs(Math.cos(ang) * sp);
-    b.setSpeed(sp);
-    b.unflatten();
-    b.unvertical();
-
-    A.paddle();
-    P.spawn(b.x, p.y, '#35e0ff', 6, { dir: -Math.PI / 2, spread: 1.4, speed: 2.4, life: 16, gravity: 0.05 });
-  };
-
-  Game.prototype.stepLasers = function () {
-    for (var i = this.lasers.length - 1; i >= 0; i--) {
-      var l = this.lasers[i];
-      l.y += l.vy;
-      if (l.y < C.HUD_H) { this.lasers.splice(i, 1); continue; }
-
-      for (var j = 0; j < this.bricks.length; j++) {
-        var br = this.bricks[j];
-        if (!br.alive) continue;
-        if (l.x >= br.x && l.x <= br.x + br.w && l.y >= br.y && l.y <= br.y + br.h) {
-          this.damageBrick(br, l.x, l.y);
-          l.dead = true;
-          break;
+    for (var k = 0; k < angles.length; k++) {
+      var crit = Math.random() < s.critChance;
+      var sh = new AF.Shot(
+        p.x + Math.cos(angles[k]) * (p.r + 4),
+        p.y + Math.sin(angles[k]) * (p.r + 4),
+        angles[k],
+        {
+          friendly: true, speed: s.projSpeed, size: s.projSize,
+          dmg: s.damage * modeMul * (crit ? 2 : 1), crit: crit,
+          pierce: s.pierce, bounce: s.bounce, homing: s.homing,
+          slow: s.slow, knockback: s.knockback,
+          color: crit ? '#fff2c4' : COL.arrow, range: AF.PLAYER.projRange
         }
-      }
-      if (l.dead) this.lasers.splice(i, 1);
+      );
+      this.shots.push(sh);
     }
+    A.shoot();
+    P.spawn(p.x + Math.cos(p.aim) * 14, p.y + Math.sin(p.aim) * 14, COL.arrow, 3,
+            { dir: p.aim, spread: 0.7, speed: 1.6, life: 10 });
   };
 
-  Game.prototype.stepPowerups = function () {
-    for (var i = this.powerups.length - 1; i >= 0; i--) {
-      var pu = this.powerups[i];
-      pu.y += pu.vy;
-      pu.t += C.STEP;
-
-      if (pu.y > C.H) { this.powerups.splice(i, 1); continue; }
-
-      var p = this.paddle;
-      if (pu.y + pu.h >= p.y && pu.y <= p.y + p.h &&
-          pu.x + pu.w >= p.x && pu.x <= p.x + p.w) {
-        this.applyPower(pu.type, pu.x + pu.w / 2, pu.y);
-        this.powerups.splice(i, 1);
-      }
-    }
+  Game.prototype.enemyShot = function (x, y, angle, dmg, speed) {
+    this.shots.push(new AF.Shot(x, y, angle, {
+      friendly: false, speed: speed, size: 6, dmg: dmg, color: COL.enemyShot, range: 1500
+    }));
+    A.enemyShot();
   };
 
-  Game.prototype.applyPower = function (type, x, y) {
-    var def = NB.POWERS[type];
-    P.spawn(x, y, def.color, 18, { speed: 3.2, life: 26 });
-    P.float(x, y - 14, def.label, def.color);
-
-    if (def.dur > 0) {
-      this.timers[type] = def.dur;
-      // 서로 반대되는 효과는 동시에 켜지지 않게 정리한다.
-      if (type === 'EXPAND') this.timers.SHRINK = 0;
-      if (type === 'SHRINK') this.timers.EXPAND = 0;
-      if (type === 'SLOW') this.timers.FAST = 0;
-      if (type === 'FAST') this.timers.SLOW = 0;
-    }
-
-    switch (type) {
-      case 'MULTI': this.splitBalls(); break;
-      case 'BONUS': this.addScore(500); break;
-      case 'LIFE':
-        this.lives++;
-        A.life();
-        this.flash = 0.5;
-        this.flashColor = NB.POWERS.LIFE.color;
-        return;
-      case 'STICKY': break;
-    }
-
-    if (def.good) A.good(); else { A.bad(); this.shake = 8; }
-  };
-
-  Game.prototype.onPowerExpire = function (type) {
-    this.timers[type] = 0;
-    // 끈끈이가 풀렸는데 공이 붙어 있으면 그대로 굳어버리므로 놓아준다.
-    if (type === 'STICKY') {
-      for (var i = 0; i < this.balls.length; i++) {
-        var b = this.balls[i];
-        if (!b.stuck) continue;
-        b.stuck = false;
-        var sp = this.ballSpeed();
-        b.vx = Math.sin(0.3) * sp;
-        b.vy = -Math.cos(0.3) * sp;
+  /* 두 점 사이가 엄폐물로 막혔는지. 선분을 일정 간격으로 찍어 본다.
+     정확한 선분-사각형 교차보다 싸고, 이 격자 크기에서는 충분히 정확하다. */
+  Game.prototype.hasLOS = function (x1, y1, x2, y2) {
+    if (!this.obstacles.length) return true;
+    var dx = x2 - x1, dy = y2 - y1;
+    var steps = Math.ceil(Math.hypot(dx, dy) / 18);
+    for (var s = 1; s < steps; s++) {
+      var t = s / steps;
+      var px = x1 + dx * t, py = y1 + dy * t;
+      for (var i = 0; i < this.obstacles.length; i++) {
+        var o = this.obstacles[i];
+        if (px >= o.x && px <= o.x + o.w && py >= o.y && py <= o.y + o.h) return false;
       }
     }
+    return true;
   };
 
-  Game.prototype.splitBalls = function () {
-    var extra = [];
-    for (var i = 0; i < this.balls.length && this.balls.length + extra.length < 9; i++) {
-      var b = this.balls[i];
-      for (var k = 0; k < 2; k++) {
-        var nb = new NB.Ball(b.x, b.y, b.speed, 0);
-        var a = Math.atan2(b.vy, b.vx) + (k === 0 ? 0.42 : -0.42);
-        nb.vx = Math.cos(a) * b.speed;
-        nb.vy = Math.sin(a) * b.speed;
-        nb.stuck = false;
-        extra.push(nb);
-      }
-      if (b.stuck) {   // 붙어 있던 공도 같이 출발시킨다
-        b.stuck = false;
-        b.vx = 0;
-        b.vy = -b.speed;
-      }
+  /* 자동 조준 대상. 사선이 트인 적 중 가장 가까운 쪽을 고르고,
+     전부 막혀 있으면 그냥 가장 가까운 적을 겨눈다(가만히 서 있는 것보다 낫다).
+
+     매 프레임 다시 고르면 조준이 떨리고 계산도 아까우니 잠깐 붙잡아 둔다. */
+  Game.prototype.autoTarget = function (p) {
+    if (p.target && !p.target.dead && p.targetT > 0) return p.target;
+
+    var best = null, bd = Infinity, fallback = null, fd = Infinity;
+    for (var i = 0; i < this.enemies.length; i++) {
+      var e = this.enemies[i];
+      if (e.dead) continue;
+      var d = AF.dist2(p.x, p.y, e.x, e.y);
+      if (d < fd) { fd = d; fallback = e; }
+      if (d < bd && this.hasLOS(p.x, p.y, e.x, e.y)) { bd = d; best = e; }
     }
-    this.balls = this.balls.concat(extra);
+    p.target = best || fallback;
+    p.targetT = 0.12;
+    return p.target;
   };
 
-  Game.prototype.loseLife = function () {
-    this.lives--;
-    this.combo = 0;
-    this.timers = {};
-    this.powerups = [];
-    this.lasers = [];
-    this.shake = 14;
-    this.flash = 0.75;
-    this.flashColor = '#ff5470';
+  /* 예측 사격. 화살이 날아가는 동안 적이 움직이므로 도착 지점을 겨눈다.
+     이게 없으면 옆으로 도는 적(사수)에게 영원히 빗나가 방이 끝나지 않는다. */
+  Game.prototype.leadAim = function (p, e) {
+    var dx = e.x - p.x, dy = e.y - p.y;
+    var steps = Math.hypot(dx, dy) / Math.max(1, p.stats.projSpeed);
+    steps = Math.min(steps, 45);   // 너무 멀리 내다보면 오히려 빗나간다
+    var tx = e.x + (e.vx || 0) * steps;
+    var ty = e.y + (e.vy || 0) * steps;
+    return Math.atan2(ty - p.y, tx - p.x);
+  };
 
-    if (this.lives <= 0) {
-      A.over();
-      this.persistHigh();
-      this.state = STATE.OVER;
-      this.overlayT = 0;
+  Game.prototype.nearestEnemy = function (x, y, maxDist) {
+    var best = null, bd = maxDist * maxDist;
+    for (var i = 0; i < this.enemies.length; i++) {
+      var e = this.enemies[i];
+      if (e.dead) continue;
+      var d = AF.dist2(x, y, e.x, e.y);
+      if (d < bd) { bd = d; best = e; }
+    }
+    return best;
+  };
+
+  Game.prototype.hitCheck = function (sh) {
+    var p = this.player;
+
+    if (!sh.friendly) {
+      var rr2 = (sh.r + p.r) * (sh.r + p.r);
+      if (AF.dist2(sh.x, sh.y, p.x, p.y) < rr2) {
+        if (p.hurt(sh.dmg, this)) sh.dead = true;
+        else if (p.inv > 0) sh.dead = true;   // 무적 중이라도 탄은 사라진다
+      }
       return;
     }
-    A.lose();
-    this.paddle.targetW = C.PADDLE_W;
-    this.resetBall();
+
+    for (var i = 0; i < this.enemies.length; i++) {
+      var e = this.enemies[i];
+      if (e.dead) continue;
+      var rad = sh.r + e.r;
+      if (AF.dist2(sh.x, sh.y, e.x, e.y) > rad * rad) continue;
+      if (sh.hitIds && sh.hitIds.indexOf(e.id) !== -1) continue;
+
+      e.hurt(sh.dmg, this, sh.crit);
+      if (sh.slow > 0) e.slowT = 1.6;
+      var kb = 3.2 * sh.knockback / Math.max(1, e.r / 13);
+      e.kx += Math.cos(sh.a) * kb;
+      e.ky += Math.sin(sh.a) * kb;
+
+      if (p.stats.lifesteal > 0 && p.hp > 0) {
+        var heal = sh.dmg * p.stats.lifesteal;
+        p.hp = Math.min(p.stats.maxHp, p.hp + heal);
+      }
+
+      if (sh.pierce > 0) {
+        sh.pierce--;
+        if (!sh.hitIds) sh.hitIds = [];
+        sh.hitIds.push(e.id);
+      } else {
+        sh.dead = true;
+      }
+      break;
+    }
   };
 
-  Game.prototype.clearLevel = function () {
-    this.levelBonus = 500 + this.lives * 250;
-    this.addScore(this.levelBonus);
-    A.clear();
-    this.overlayT = 0;
-    this.balls = [];
-    this.powerups = [];
-    this.lasers = [];
-    for (var i = 0; i < 30; i++) {
-      P.spawn(Math.random() * C.W, C.HUD_H + Math.random() * 300, '#ffd84d', 3, { speed: 3, life: 40 });
+  // ------------------------------------------------------------- 방 클리어
+
+  Game.prototype.roomClear = function () {
+    var bonus = 50 + this.room * 25;
+    this.addScore(bonus);
+    A.roomClear();
+
+    if (this.plan.isBoss) {
+      // 보스를 잡으면 숨을 돌릴 만큼 회복시킨다
+      var heal = this.player.stats.maxHp * 0.3;
+      this.player.hp = Math.min(this.player.stats.maxHp, this.player.hp + heal);
+      P.float(this.player.x, this.player.y - 30, '+' + Math.round(heal), COL.hp, true);
+      A.heal();
     }
-    this.persistHigh();
-    this.state = (this.levelIndex + 1 >= NB.Levels.count) ? STATE.WIN : STATE.CLEAR;
+
+    this.persistBest();
+    this.choices = this.rollUpgrades(3);
+    this.overlayT = 0;
+    this.state = STATE.UPGRADE;
+  };
+
+  /* 상한에 닿지 않았고 조건을 만족하는 능력 중 가중치로 n 개를 겹치지 않게 뽑는다. */
+  Game.prototype.rollUpgrades = function (n) {
+    var self = this;
+    var pool = AF.UPGRADES.filter(function (u) {
+      if ((self.taken[u.id] || 0) >= u.max) return false;
+      if (u.need && !u.need(self)) return false;
+      return true;
+    });
+    var out = [];
+    while (out.length < n && pool.length) {
+      var table = pool.map(function (u) { return [u, u.weight]; });
+      var picked = AF.weighted(table);
+      out.push(picked);
+      pool = pool.filter(function (u) { return u !== picked; });
+    }
+    return out;
+  };
+
+  Game.prototype.cardRects = function () {
+    var w = 176, h = 232, gap = 18;
+    var total = this.choices.length * w + (this.choices.length - 1) * gap;
+    var x0 = C.W / 2 - total / 2;
+    var y = C.Y0 + C.SIZE / 2 - h / 2 + 20;
+    var out = [];
+    for (var i = 0; i < this.choices.length; i++) {
+      out.push({ x: x0 + i * (w + gap), y: y, w: w, h: h });
+    }
+    return out;
+  };
+
+  Game.prototype.stepUpgrade = function () {
+    var rects = this.cardRects();
+    var pick = -1;
+    if (I.hit('Digit1')) pick = 0;
+    if (I.hit('Digit2')) pick = 1;
+    if (I.hit('Digit3')) pick = 2;
+    if (I.pointer.tapped) {
+      for (var i = 0; i < rects.length; i++) {
+        var r = rects[i];
+        if (I.pointer.x >= r.x && I.pointer.x <= r.x + r.w &&
+            I.pointer.y >= r.y && I.pointer.y <= r.y + r.h) { pick = i; break; }
+      }
+    }
+    if (pick < 0 || pick >= this.choices.length) return;
+
+    var u = this.choices[pick];
+    u.apply(this.player.stats, this.player);
+    this.player.hp = Math.min(this.player.hp, this.player.stats.maxHp);
+    this.taken[u.id] = (this.taken[u.id] || 0) + 1;
+    if (this.takenOrder.indexOf(u.id) === -1) this.takenOrder.push(u.id);
+    A.upgrade();
+    this.flash = 0.4;
+    this.flashColor = COL.accent;
+
+    this.nextRoom();
+    this.state = STATE.PLAYING;
+  };
+
+  Game.prototype.onPlayerDeath = function () {
+    A.death();
+    this.shake = 22;
+    this.flash = 0.7;
+    this.flashColor = '#ff5a5f';
+    this.persistBest();
+    this.overlayT = 0;
+    this.state = STATE.DEAD;
   };
 
   // ---------------------------------------------------------------- 렌더
@@ -539,430 +592,524 @@ NB.Game = (function () {
     var ctx = this.ctx;
     ctx.save();
     ctx.clearRect(0, 0, C.W, C.H);
-    this.drawBackground(ctx);
+    ctx.fillStyle = COL.floor;
+    ctx.fillRect(0, 0, C.W, C.H);
 
     if (this.shake > 0.2) {
       ctx.translate((Math.random() - 0.5) * this.shake, (Math.random() - 0.5) * this.shake);
     }
 
-    this.drawWalls(ctx);
-    this.drawBricks(ctx);
-    this.drawPowerups(ctx);
-    this.drawLasers(ctx);
-    this.drawPaddle(ctx);
-    this.drawBalls(ctx);
+    this.drawFloor(ctx);
+    this.drawObstacles(ctx);
+    this.drawShots(ctx, false);
+    this.drawEnemies(ctx);
+    if (this.state !== STATE.TITLE) this.drawPlayer(ctx);
+    this.drawShots(ctx, true);
     P.draw(ctx);
     ctx.restore();
 
     this.drawHud(ctx);
+    this.drawSticks(ctx);
 
     if (this.flash > 0) {
       ctx.save();
-      ctx.globalAlpha = Math.min(0.32, this.flash);
+      ctx.globalAlpha = Math.min(0.3, this.flash);
       ctx.fillStyle = this.flashColor;
-      ctx.fillRect(0, C.HUD_H, C.W, C.H - C.HUD_H);   // HUD 는 가리지 않는다
+      ctx.fillRect(0, C.HUD_H, C.W, C.H - C.HUD_H);
       ctx.restore();
     }
 
-    if (this.state !== STATE.PLAYING) this.drawOverlay(ctx);
+    if (this.state === STATE.PLAYING && this.introT > 0) this.drawIntro(ctx);
+    if (this.state === STATE.TITLE) this.drawTitle(ctx);
+    if (this.state === STATE.PAUSED) this.drawPanel(ctx, '일시정지', ['P · Esc · 화면 터치로 계속'], '');
+    if (this.state === STATE.UPGRADE) this.drawUpgrade(ctx);
+    if (this.state === STATE.DEAD) this.drawDead(ctx);
   };
 
-  Game.prototype.drawBackground = function (ctx) {
-    ctx.fillStyle = '#05060f';
-    ctx.fillRect(0, 0, C.W, C.H);
+  Game.prototype.drawFloor = function (ctx) {
+    // 격자 바닥. 두 톤을 번갈아 깔아 이동 거리가 눈에 들어오게 한다.
+    for (var r = 0; r < C.GRID; r++) {
+      for (var c = 0; c < C.GRID; c++) {
+        ctx.fillStyle = (r + c) % 2 ? COL.floor : COL.floorAlt;
+        ctx.fillRect(C.X0 + c * C.CELL, C.Y0 + r * C.CELL, C.CELL, C.CELL);
+      }
+    }
+    // 방 테두리
+    ctx.strokeStyle = 'rgba(255,179,71,0.22)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(C.X0 - 1, C.Y0 - 1, C.SIZE + 2, C.SIZE + 2);
 
-    // 천천히 흐르는 격자 — 정지 화면처럼 보이지 않게 하는 최소한의 장치
-    var g = 40;
-    var off = (this.time * 14) % g;
+    var g = ctx.createRadialGradient(C.X0 + C.SIZE / 2, C.Y0 + C.SIZE / 2, 40,
+                                     C.X0 + C.SIZE / 2, C.Y0 + C.SIZE / 2, C.SIZE * 0.75);
+    g.addColorStop(0, 'rgba(255,170,90,0.05)');
+    g.addColorStop(1, 'rgba(0,0,0,0.35)');
+    ctx.fillStyle = g;
+    ctx.fillRect(C.X0, C.Y0, C.SIZE, C.SIZE);
+  };
+
+  Game.prototype.drawObstacles = function (ctx) {
+    for (var i = 0; i < this.obstacles.length; i++) {
+      var o = this.obstacles[i];
+      ctx.fillStyle = COL.wall;
+      rr(ctx, o.x + 2, o.y + 2, o.w - 4, o.h - 4, 6);
+      ctx.fill();
+      // 윗면을 밝게 해 입체로 보이게
+      ctx.fillStyle = COL.wallTop;
+      rr(ctx, o.x + 2, o.y + 2, o.w - 4, (o.h - 4) * 0.42, 6);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.lineWidth = 1.5;
+      rr(ctx, o.x + 2, o.y + 2, o.w - 4, o.h - 4, 6);
+      ctx.stroke();
+    }
+  };
+
+  Game.prototype.drawShots = function (ctx, friendly) {
+    for (var i = 0; i < this.shots.length; i++) {
+      var s = this.shots[i];
+      if (!!s.friendly !== friendly) continue;
+      ctx.save();
+      ctx.translate(s.x, s.y);
+      ctx.rotate(s.a);
+      if (s.friendly) {
+        // 화살: 길쭉한 몸통 + 밝은 촉
+        ctx.shadowColor = s.color; ctx.shadowBlur = 8;
+        ctx.fillStyle = s.color;
+        rr(ctx, -s.r * 2.2, -s.r * 0.34, s.r * 3.4, s.r * 0.68, s.r * 0.34);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(s.r * 1.9, 0);
+        ctx.lineTo(s.r * 0.7, -s.r * 0.8);
+        ctx.lineTo(s.r * 0.7, s.r * 0.8);
+        ctx.closePath();
+        ctx.fill();
+      } else {
+        ctx.shadowColor = s.color; ctx.shadowBlur = 10;
+        ctx.fillStyle = s.color;
+        ctx.beginPath();
+        ctx.arc(0, 0, s.r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.7)';
+        ctx.beginPath();
+        ctx.arc(-s.r * 0.25, -s.r * 0.25, s.r * 0.35, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  };
+
+  Game.prototype.drawEnemies = function (ctx) {
+    for (var i = 0; i < this.enemies.length; i++) {
+      var e = this.enemies[i];
+      var d = e.def;
+
+      // 돌진병이 힘을 모을 때는 조준선을 보여 준다 — 안 보이면 불공평하다
+      if (e.type === 'charger' && e.phase === 'windup') {
+        ctx.save();
+        ctx.globalAlpha = 0.28 + Math.sin(this.time * 26) * 0.2;
+        ctx.strokeStyle = d.color;
+        ctx.lineWidth = 3;
+        ctx.setLineDash([9, 7]);
+        ctx.beginPath();
+        ctx.moveTo(e.x, e.y);
+        ctx.lineTo(e.x + Math.cos(e.dashA) * 300, e.y + Math.sin(e.dashA) * 300);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      ctx.save();
+      ctx.translate(e.x, e.y);
+      var wob = d.shape === 'blob' ? 1 + Math.sin(e.t * 6) * 0.06 : 1;
+      ctx.scale(wob, 2 - wob);
+
+      ctx.shadowColor = d.color;
+      ctx.shadowBlur = d.shape === 'boss' ? 26 : 10;
+      ctx.fillStyle = e.slowT > 0 ? '#7ec8ff' : d.color;
+      ctx.strokeStyle = d.dark;
+      ctx.lineWidth = 3;
+
+      var r = e.r;
+      ctx.beginPath();
+      if (d.shape === 'tri') {
+        var a0 = Math.atan2(this.player.y - e.y, this.player.x - e.x);
+        for (var k = 0; k < 3; k++) {
+          var ang = a0 + k * (Math.PI * 2 / 3);
+          var px = Math.cos(ang) * r * (k === 0 ? 1.25 : 1);
+          var py = Math.sin(ang) * r * (k === 0 ? 1.25 : 1);
+          if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+      } else if (d.shape === 'square') {
+        var q = r * 0.88;
+        ctx.rect(-q, -q, q * 2, q * 2);
+      } else if (d.shape === 'diamond') {
+        ctx.moveTo(0, -r); ctx.lineTo(r, 0); ctx.lineTo(0, r); ctx.lineTo(-r, 0); ctx.closePath();
+      } else if (d.shape === 'boss') {
+        for (var b = 0; b < 6; b++) {
+          var ba = (b / 6) * Math.PI * 2 + e.t * 0.4;
+          var bx = Math.cos(ba) * r, by = Math.sin(ba) * r;
+          if (b === 0) ctx.moveTo(bx, by); else ctx.lineTo(bx, by);
+        }
+        ctx.closePath();
+      } else {
+        ctx.arc(0, 0, r, 0, Math.PI * 2);
+      }
+      ctx.fill();
+      ctx.stroke();
+
+      if (e.flash > 0) {
+        ctx.globalAlpha = e.flash * 0.85;
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+      ctx.restore();
+
+      // 피해를 입은 적만 체력 막대를 보여 준다 (평소엔 화면이 지저분해진다)
+      if (e.hp < e.maxHp && d.shape !== 'boss') {
+        var bw = e.r * 2.2, bx2 = e.x - bw / 2, by2 = e.y - e.r - 11;
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.fillRect(bx2, by2, bw, 4);
+        ctx.fillStyle = d.color;
+        ctx.fillRect(bx2, by2, bw * (e.hp / e.maxHp), 4);
+      }
+    }
+  };
+
+  Game.prototype.drawPlayer = function (ctx) {
+    var p = this.player;
+    if (p.hp <= 0) return;
+
+    // 무적 시간에는 깜빡인다
+    var blink = p.inv > 0 && Math.floor(this.time * 20) % 2 === 0;
     ctx.save();
-    ctx.globalAlpha = 0.12;
-    ctx.strokeStyle = '#2a3d6b';
-    ctx.lineWidth = 1;
+    ctx.globalAlpha = blink ? 0.45 : 1;
+
+    // 자동 발사 모드에서 멈춰 있으면 발밑에 링을 띄워 "쏘는 중"을 알린다
+    if (this.mode === 'auto' && p.stillT > 0.05 && this.enemies.length) {
+      ctx.strokeStyle = 'rgba(255,212,121,0.55)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r + 8 + Math.sin(this.time * 9) * 2, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    ctx.translate(p.x, p.y);
+    ctx.shadowColor = COL.player;
+    ctx.shadowBlur = 16;
+    ctx.fillStyle = COL.player;
     ctx.beginPath();
-    for (var x = 0; x <= C.W; x += g) { ctx.moveTo(x + 0.5, C.HUD_H); ctx.lineTo(x + 0.5, C.H); }
-    for (var y = C.HUD_H + off; y <= C.H; y += g) { ctx.moveTo(0, y + 0.5); ctx.lineTo(C.W, y + 0.5); }
+    ctx.arc(0, 0, p.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = COL.playerIn;
+    ctx.beginPath();
+    ctx.arc(0, 0, p.r * 0.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 활: 조준 방향으로 호를 그린다
+    ctx.rotate(p.aim);
+    ctx.strokeStyle = COL.player;
+    ctx.lineWidth = 3.5;
+    ctx.beginPath();
+    ctx.arc(p.r * 0.5, 0, p.r * 0.95, -1.05, 1.05);
     ctx.stroke();
     ctx.restore();
 
-    var grad = ctx.createRadialGradient(C.W / 2, C.H * 0.2, 20, C.W / 2, C.H * 0.2, C.W * 0.9);
-    grad.addColorStop(0, 'rgba(53,224,255,0.09)');
-    grad.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, C.HUD_H, C.W, C.H - C.HUD_H);
-  };
-
-  Game.prototype.drawWalls = function (ctx) {
-    ctx.save();
-    ctx.fillStyle = 'rgba(53,224,255,0.10)';
-    ctx.fillRect(0, C.HUD_H, C.WALL, C.H - C.HUD_H);
-    ctx.fillRect(C.W - C.WALL, C.HUD_H, C.WALL, C.H - C.HUD_H);
-    ctx.fillStyle = 'rgba(53,224,255,0.55)';
-    ctx.fillRect(C.WALL - 2, C.HUD_H, 2, C.H - C.HUD_H);
-    ctx.fillRect(C.W - C.WALL, C.HUD_H, 2, C.H - C.HUD_H);
-    ctx.fillRect(0, C.HUD_H, C.W, 2);
-
-    // 바닥(=놓치는 선)은 위험을 알리도록 붉게
-    ctx.fillStyle = 'rgba(255,84,112,0.35)';
-    ctx.fillRect(0, C.H - 3, C.W, 3);
-    ctx.restore();
-  };
-
-  Game.prototype.drawBricks = function (ctx) {
-    for (var i = 0; i < this.bricks.length; i++) {
-      var br = this.bricks[i];
-      if (!br.alive) continue;
-      var cols = br.colors();
-      var x = br.x + 2, y = br.y + 2, w = br.w - 4, h = br.h - 4;
-
-      ctx.fillStyle = cols[1];
-      rr(ctx, x, y, w, h, 5);
-      ctx.fill();
-
-      ctx.fillStyle = cols[0];
-      rr(ctx, x, y, w, h * 0.5, 5);
-      ctx.fill();
-
-      ctx.strokeStyle = cols[0];
-      ctx.lineWidth = 1.5;
-      rr(ctx, x, y, w, h, 5);
-      ctx.stroke();
-
-      if (br.solid) {
-        ctx.save();
-        ctx.strokeStyle = 'rgba(255,255,255,0.18)';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(x + 6, y + h - 5); ctx.lineTo(x + w - 6, y + 5);
-        ctx.stroke();
-        ctx.restore();
-      } else if (br.forcePower) {
-        ctx.save();
-        ctx.fillStyle = 'rgba(255,255,255,0.85)';
-        ctx.font = 'bold 13px system-ui, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('?', x + w / 2, y + h / 2 + 1);
-        ctx.restore();
-      }
-
-      if (br.flash > 0) {
-        ctx.save();
-        ctx.globalAlpha = br.flash * 0.8;
-        ctx.fillStyle = '#ffffff';
-        rr(ctx, x, y, w, h, 5);
-        ctx.fill();
-        ctx.restore();
-      }
-    }
-  };
-
-  Game.prototype.drawPaddle = function (ctx) {
-    var p = this.paddle;
-    ctx.save();
-    ctx.shadowColor = '#35e0ff';
-    ctx.shadowBlur = 18;
-
-    var grad = ctx.createLinearGradient(0, p.y, 0, p.y + p.h);
-    grad.addColorStop(0, '#9df3ff');
-    grad.addColorStop(0.5, '#35e0ff');
-    grad.addColorStop(1, '#1585a8');
-    ctx.fillStyle = this.timers.SHRINK > 0 ? '#ff8a9c' : grad;
-    rr(ctx, p.x, p.y, p.w, p.h, 7);
-    ctx.fill();
-    ctx.restore();
-
-    if (this.timers.STICKY > 0) {
+    if (p.hurtFlash > 0) {
       ctx.save();
-      ctx.strokeStyle = NB.POWERS.STICKY.color;
-      ctx.lineWidth = 2;
-      ctx.setLineDash([5, 4]);
+      ctx.globalAlpha = p.hurtFlash * 0.7;
+      ctx.fillStyle = '#ff5a5f';
       ctx.beginPath();
-      ctx.moveTo(p.x + 3, p.y - 3);
-      ctx.lineTo(p.x + p.w - 3, p.y - 3);
-      ctx.stroke();
+      ctx.arc(p.x, p.y, p.r + 5, 0, Math.PI * 2);
+      ctx.fill();
       ctx.restore();
-    }
-
-    if (this.timers.LASER > 0) {
-      ctx.fillStyle = NB.POWERS.LASER.color;
-      ctx.fillRect(p.x + 3, p.y - 7, 5, 7);
-      ctx.fillRect(p.x + p.w - 8, p.y - 7, 5, 7);
     }
   };
 
-  Game.prototype.drawBalls = function (ctx) {
-    for (var i = 0; i < this.balls.length; i++) {
-      var b = this.balls[i];
-
+  Game.prototype.drawSticks = function (ctx) {
+    var sticks = [I.moveStick, I.aimStick];
+    for (var i = 0; i < sticks.length; i++) {
+      var st = sticks[i];
+      if (!st.active) continue;
       ctx.save();
-      ctx.lineCap = 'round';
-      for (var t = 0; t + 3 < b.trail.length; t += 2) {
-        var a = (t / b.trail.length) * 0.35;
-        ctx.globalAlpha = a;
-        ctx.strokeStyle = '#35e0ff';
-        ctx.lineWidth = b.r * (t / b.trail.length) * 1.6;
-        ctx.beginPath();
-        ctx.moveTo(b.trail[t], b.trail[t + 1]);
-        ctx.lineTo(b.trail[t + 2], b.trail[t + 3]);
-        ctx.stroke();
-      }
-      ctx.restore();
-
-      ctx.save();
-      ctx.shadowColor = '#ffffff';
-      ctx.shadowBlur = 16;
-      ctx.fillStyle = '#ffffff';
+      ctx.globalAlpha = 0.3;
+      ctx.strokeStyle = i === 0 ? COL.accent : COL.enemyShot;
+      ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-    }
-  };
-
-  Game.prototype.drawPowerups = function (ctx) {
-    for (var i = 0; i < this.powerups.length; i++) {
-      var pu = this.powerups[i];
-      var def = NB.POWERS[pu.type];
-      var wob = Math.sin(pu.t * 6) * 2;
-
-      ctx.save();
-      ctx.translate(pu.x + pu.w / 2 + wob, pu.y + pu.h / 2);
-      ctx.shadowColor = def.color;
-      ctx.shadowBlur = 14;
-      ctx.fillStyle = def.good ? 'rgba(6,12,24,0.92)' : 'rgba(40,6,14,0.92)';
-      rr(ctx, -pu.w / 2, -pu.h / 2, pu.w, pu.h, 6);
-      ctx.fill();
-      ctx.strokeStyle = def.color;
-      ctx.lineWidth = 2;
-      rr(ctx, -pu.w / 2, -pu.h / 2, pu.w, pu.h, 6);
+      ctx.arc(st.ox, st.oy, I.STICK_R, 0, Math.PI * 2);
       ctx.stroke();
-      ctx.shadowBlur = 0;
-      ctx.fillStyle = def.color;
-      ctx.font = 'bold 12px system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(def.label, 0, 1);
+      ctx.globalAlpha = 0.55;
+      ctx.fillStyle = i === 0 ? COL.accent : COL.enemyShot;
+      ctx.beginPath();
+      ctx.arc(st.ox + st.dx * I.STICK_R, st.oy + st.dy * I.STICK_R, 22, 0, Math.PI * 2);
+      ctx.fill();
       ctx.restore();
     }
-  };
-
-  Game.prototype.drawLasers = function (ctx) {
-    ctx.save();
-    ctx.shadowColor = NB.POWERS.LASER.color;
-    ctx.shadowBlur = 10;
-    ctx.fillStyle = NB.POWERS.LASER.color;
-    for (var i = 0; i < this.lasers.length; i++) {
-      ctx.fillRect(this.lasers[i].x - 1.5, this.lasers[i].y - 14, 3, 14);
-    }
-    ctx.restore();
   };
 
   // ------------------------------------------------------------------ HUD
 
   Game.prototype.drawHud = function (ctx) {
-    var lv = NB.Levels.get(this.levelIndex);
-
+    var p = this.player, s = p.stats;
     ctx.save();
-    ctx.fillStyle = 'rgba(5,8,20,0.92)';
+    ctx.fillStyle = 'rgba(12,10,18,0.94)';
     ctx.fillRect(0, 0, C.W, C.HUD_H);
 
-    ctx.textBaseline = 'alphabetic';
+    // 체력 막대
+    var bw = 258, bx = 20, by = 20;
+    var ratio = AF.clamp(p.hp / s.maxHp, 0, 1);
+    ctx.fillStyle = 'rgba(255,255,255,0.09)';
+    rr(ctx, bx, by, bw, 20, 10); ctx.fill();
+    ctx.fillStyle = ratio > 0.3 ? COL.hp : COL.hpLow;
+    rr(ctx, bx, by, Math.max(6, bw * ratio), 20, 10); ctx.fill();
+    ctx.font = 'bold 12px system-ui, sans-serif';
+    ctx.fillStyle = '#0b0a10';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(Math.ceil(p.hp) + ' / ' + Math.round(s.maxHp), bx + 10, by + 11);
+
+    // 획득한 능력을 아이콘으로 나열
+    ctx.textAlign = 'left';
+    ctx.font = '13px system-ui, sans-serif';
+    var ix = bx, iy = by + 32;
+    for (var i = 0; i < this.takenOrder.length && i < 14; i++) {
+      var id = this.takenOrder[i];
+      var u = null;
+      for (var j = 0; j < AF.UPGRADES.length; j++) if (AF.UPGRADES[j].id === id) u = AF.UPGRADES[j];
+      if (!u) continue;
+      var n = this.taken[id];
+      ctx.fillStyle = 'rgba(255,179,71,0.16)';
+      rr(ctx, ix, iy, n > 1 ? 30 : 22, 18, 5); ctx.fill();
+      ctx.fillStyle = COL.accent;
+      ctx.fillText(u.icon + (n > 1 ? n : ''), ix + 5, iy + 10);
+      ix += (n > 1 ? 34 : 26);
+    }
+
+    // 방 / 처치 / 점수
+    ctx.textAlign = 'right';
     ctx.font = '11px system-ui, sans-serif';
-    ctx.fillStyle = '#5c6f96';
-    ctx.textAlign = 'left';
-    ctx.fillText('SCORE', 24, 30);
-    ctx.textAlign = 'center';
-    ctx.fillText('BEST', C.W / 2, 30);
+    ctx.fillStyle = COL.inkDim;
+    ctx.fillText('방', C.W - 268, 22);
+    ctx.fillText('처치', C.W - 186, 22);
+    ctx.fillText('점수', C.W - 20, 22);
+
+    ctx.font = 'bold 24px "Segoe UI", system-ui, sans-serif';
+    ctx.fillStyle = this.plan && this.plan.isBoss ? COL.hpLow : '#f0e6dc';
+    ctx.fillText(String(this.room), C.W - 268, 46);
+    ctx.fillStyle = '#f0e6dc';
+    ctx.fillText(String(this.kills), C.W - 186, 46);
+    ctx.fillStyle = this.newBest ? COL.accent : '#f0e6dc';
+    ctx.fillText(pad(this.score, 5), C.W - 20, 46);
+
+    ctx.font = '10px system-ui, sans-serif';
+    ctx.fillStyle = COL.inkDim;
     ctx.textAlign = 'right';
-    ctx.fillText('LEVEL', C.W - 24, 30);
+    ctx.fillText('최고 ' + pad(this.best, 5), C.W - 20, 62);
 
-    ctx.font = 'bold 26px "Segoe UI", system-ui, sans-serif';
-    ctx.fillStyle = '#e8f4ff';
     ctx.textAlign = 'left';
-    ctx.fillText(pad(this.score, 6), 24, 56);
-
-    ctx.textAlign = 'center';
-    ctx.fillStyle = this.newHigh ? '#ffd84d' : '#9fb3d9';
-    ctx.fillText(pad(this.high, 6), C.W / 2, 56);
-
-    ctx.textAlign = 'right';
-    ctx.fillStyle = '#e8f4ff';
-    ctx.fillText((this.levelIndex + 1) + '/' + NB.Levels.count, C.W - 24, 56);
-
-    // 남은 목숨
-    ctx.textAlign = 'left';
-    var shown = Math.min(this.lives, 6);
-    for (var i = 0; i < shown; i++) {
-      ctx.beginPath();
-      ctx.fillStyle = '#35e0ff';
-      ctx.arc(30 + i * 16, 76, 5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    if (this.lives > 6) {
-      ctx.font = '11px system-ui, sans-serif';
-      ctx.fillStyle = '#9fb3d9';
-      ctx.fillText('+' + (this.lives - 6), 30 + shown * 16, 80);
-    }
-
-    ctx.font = '12px system-ui, sans-serif';
-    ctx.fillStyle = '#5c6f96';
-    ctx.textAlign = 'center';
-    ctx.fillText(lv.name, C.W / 2, 80);
-
-    // 콤보 배수
-    if (this.combo >= 2) {
-      ctx.textAlign = 'right';
-      ctx.font = 'bold 15px system-ui, sans-serif';
-      ctx.fillStyle = '#ffd84d';
-      ctx.fillText('COMBO x' + this.comboMult().toFixed(1), C.W - 24, 80);
-    }
-
-    if (A.isMuted()) {
-      ctx.textAlign = 'left';
-      ctx.font = '11px system-ui, sans-serif';
-      ctx.fillStyle = '#5c6f96';
-      ctx.fillText('MUTED', 24, 16);
-    }
+    ctx.fillStyle = COL.inkDim;
+    ctx.fillText(this.mode === 'auto' ? '자동 발사' : '수동 조준', bx, 12);
+    if (A.isMuted()) ctx.fillText('음소거', bx + 70, 12);
     ctx.restore();
 
-    this.drawPowerChips(ctx);
+    // 보스 체력은 화면 위쪽에 크게
+    var boss = null;
+    for (var b = 0; b < this.enemies.length; b++) if (this.enemies[b].type === 'boss') boss = this.enemies[b];
+    if (boss) {
+      ctx.save();
+      var w2 = C.SIZE - 80, x2 = C.X0 + 40, y2 = C.Y0 + 12;
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      rr(ctx, x2, y2, w2, 14, 7); ctx.fill();
+      ctx.fillStyle = COL.hpLow;
+      rr(ctx, x2, y2, Math.max(4, w2 * (boss.hp / boss.maxHp)), 14, 7); ctx.fill();
+      ctx.font = 'bold 11px system-ui, sans-serif';
+      ctx.fillStyle = '#fff';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('수호자', C.W / 2, y2 + 7);
+      ctx.restore();
+    }
   };
 
-  /* 켜져 있는 파워업을 필드 왼쪽 아래에 남은 시간과 함께 세로로 쌓는다. */
-  Game.prototype.drawPowerChips = function (ctx) {
-    var y = C.H - 34;
+  Game.prototype.drawIntro = function (ctx) {
+    var a = Math.min(1, this.introT / 0.5);
     ctx.save();
-    ctx.font = 'bold 11px system-ui, sans-serif';
-    ctx.textBaseline = 'middle';
-    for (var k in this.timers) {
-      if (!(this.timers[k] > 0)) continue;
-      var def = NB.POWERS[k];
-      var w = 54;
-      var x = C.WALL + 8;
-      var ratio = this.timers[k] / def.dur;
-
-      ctx.globalAlpha = this.timers[k] < 3 && Math.floor(this.time * 6) % 2 === 0 ? 0.35 : 1;
-      ctx.fillStyle = 'rgba(6,12,24,0.85)';
-      rr(ctx, x, y, w, 16, 4);
-      ctx.fill();
-      ctx.fillStyle = def.color;
-      ctx.globalAlpha *= 0.30;
-      rr(ctx, x, y, w * ratio, 16, 4);
-      ctx.fill();
-      ctx.globalAlpha = 1;
-      ctx.strokeStyle = def.color;
-      ctx.lineWidth = 1;
-      rr(ctx, x, y, w, 16, 4);
-      ctx.stroke();
-      ctx.fillStyle = def.color;
-      ctx.textAlign = 'left';
-      ctx.fillText(def.label + ' ' + Math.ceil(this.timers[k]) + 's', x + 5, y + 8);
-      y -= 20;
-    }
+    ctx.globalAlpha = a;
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 40px "Segoe UI", system-ui, sans-serif';
+    ctx.fillStyle = this.plan.isBoss ? COL.hpLow : COL.accent;
+    ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 20;
+    ctx.fillText(this.plan.isBoss ? '보스' : '방 ' + this.room, C.W / 2, C.Y0 + C.SIZE / 2);
     ctx.restore();
   };
 
   // -------------------------------------------------------------- 오버레이
 
-  function pad(n, len) {
-    var s = String(Math.max(0, Math.floor(n)));
-    while (s.length < len) s = '0' + s;
-    return s;
-  }
-
-  Game.prototype.drawOverlay = function (ctx) {
-    var title, lines, hint, color;
-
-    switch (this.state) {
-      case STATE.TITLE:
-        title = 'NEON BREAKER';
-        color = '#35e0ff';
-        lines = [
-          '마우스 · 터치 · ←/→ 로 패들을 움직이고',
-          'Space 로 공을 쏜다. 벽돌을 전부 부수면 다음 층.',
-          '',
-          '\'?\' 벽돌은 아이템 확정 · 빨간 아이템은 함정',
-          this.high > 0 ? 'BEST  ' + pad(this.high, 6) : ''
-        ];
-        hint = 'Space / 화면 터치 로 시작';
-        break;
-
-      case STATE.PAUSED:
-        title = 'PAUSED';
-        color = '#9fb3d9';
-        lines = ['P · Esc · 화면 터치로 계속'];
-        hint = '';
-        break;
-
-      case STATE.CLEAR:
-        var next = NB.Levels.get(this.levelIndex + 1);
-        title = 'LEVEL ' + (this.levelIndex + 1) + ' CLEAR';
-        color = '#5dff9b';
-        lines = [
-          NB.Levels.get(this.levelIndex).name + ' 돌파',
-          '클리어 보너스  +' + this.levelBonus,
-          '남은 목숨 ' + this.lives + '개',
-          '',
-          next ? '다음: ' + next.name : ''
-        ];
-        hint = 'Space / 터치 로 계속';
-        break;
-
-      case STATE.OVER:
-        title = 'GAME OVER';
-        color = '#ff5470';
-        lines = [
-          '최종 점수  ' + pad(this.score, 6),
-          '도달 레벨  ' + (this.levelIndex + 1) + '/' + NB.Levels.count,
-          this.newHigh ? '★ 최고 기록 갱신 ★' : 'BEST  ' + pad(this.high, 6)
-        ];
-        hint = 'Space / 터치 로 타이틀';
-        break;
-
-      case STATE.WIN:
-        title = 'ALL CLEAR!';
-        color = '#ffd84d';
-        lines = [
-          '8개 레벨을 전부 부쉈다.',
-          '최종 점수  ' + pad(this.score, 6),
-          this.newHigh ? '★ 최고 기록 갱신 ★' : 'BEST  ' + pad(this.high, 6)
-        ];
-        hint = 'Space / 터치 로 타이틀';
-        break;
-
-      default:
-        return;
-    }
-
-    ctx.save();
-    ctx.fillStyle = 'rgba(3,5,14,0.82)';
+  Game.prototype.dim = function (ctx, alpha) {
+    ctx.fillStyle = 'rgba(8,6,14,' + alpha + ')';
     ctx.fillRect(0, C.HUD_H, C.W, C.H - C.HUD_H);
+  };
 
-    var cy = C.H * 0.44;
+  Game.prototype.drawPanel = function (ctx, title, lines, hint, color) {
+    this.dim(ctx, 0.82);
+    var cy = C.Y0 + C.SIZE * 0.4;
+    ctx.save();
     ctx.textAlign = 'center';
-
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 24;
-    ctx.fillStyle = color;
-    ctx.font = 'bold 46px "Segoe UI", system-ui, sans-serif';
+    ctx.fillStyle = color || COL.accent;
+    ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 22;
+    ctx.font = 'bold 44px "Segoe UI", system-ui, sans-serif';
     ctx.fillText(title, C.W / 2, cy);
     ctx.shadowBlur = 0;
-
     ctx.font = '16px system-ui, sans-serif';
-    ctx.fillStyle = '#9fb3d9';
+    ctx.fillStyle = COL.ink;
     for (var i = 0; i < lines.length; i++) {
-      if (!lines[i]) continue;
-      ctx.fillText(lines[i], C.W / 2, cy + 46 + i * 26);
+      if (lines[i]) ctx.fillText(lines[i], C.W / 2, cy + 44 + i * 26);
     }
-
     if (hint) {
-      // 깜빡여서 "여기서 입력을 기다린다"는 걸 알린다
       ctx.globalAlpha = 0.55 + Math.sin(this.time * 4) * 0.35;
       ctx.font = 'bold 15px system-ui, sans-serif';
-      ctx.fillStyle = '#e8f4ff';
-      ctx.fillText(hint, C.W / 2, cy + 56 + lines.length * 26 + 20);
+      ctx.fillStyle = '#f0e6dc';
+      ctx.fillText(hint, C.W / 2, cy + 60 + lines.length * 26 + 16);
     }
     ctx.restore();
+  };
+
+  Game.prototype.drawTitle = function (ctx) {
+    this.dim(ctx, 0.84);
+    var ctxW = C.W / 2;
+    ctx.save();
+    ctx.textAlign = 'center';
+
+    ctx.fillStyle = COL.accent;
+    ctx.shadowColor = COL.accent; ctx.shadowBlur = 26;
+    ctx.font = 'bold 58px "Segoe UI", system-ui, sans-serif';
+    ctx.fillText('ARROWFALL', ctxW, C.Y0 + 150);
+    ctx.shadowBlur = 0;
+
+    ctx.font = '15px system-ui, sans-serif';
+    ctx.fillStyle = COL.ink;
+    ctx.fillText('방을 하나씩 돌파하며 능력을 쌓는 로그라이트', ctxW, C.Y0 + 186);
+    ctx.fillText('5방마다 보스가 기다린다', ctxW, C.Y0 + 210);
+
+    // 조작 모드 선택
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.fillStyle = COL.inkDim;
+    ctx.fillText('조작 방식', ctxW, C.Y0 + 244);
+
+    var modes = [
+      { id: 'auto', name: '자동 발사', sub: '멈추면 자동으로 쏜다', bonus: '피해 +15%' },
+      { id: 'manual', name: '수동 조준', sub: '움직이며 직접 조준', bonus: '자유로운 조준' }
+    ];
+    for (var i = 0; i < 2; i++) {
+      var m = modes[i];
+      var w = 208, h = 88, gap = 16;
+      var x = ctxW - (w * 2 + gap) / 2 + i * (w + gap);
+      var y = C.Y0 + 258;
+      var on = this.mode === m.id;
+      ctx.fillStyle = on ? 'rgba(255,179,71,0.16)' : 'rgba(255,255,255,0.04)';
+      rr(ctx, x, y, w, h, 12); ctx.fill();
+      ctx.strokeStyle = on ? COL.accent : 'rgba(255,255,255,0.14)';
+      ctx.lineWidth = on ? 2.5 : 1.5;
+      rr(ctx, x, y, w, h, 12); ctx.stroke();
+
+      ctx.fillStyle = on ? COL.accent : COL.ink;
+      ctx.font = 'bold 19px system-ui, sans-serif';
+      ctx.fillText(m.name, x + w / 2, y + 32);
+      ctx.font = '12px system-ui, sans-serif';
+      ctx.fillStyle = COL.inkDim;
+      ctx.fillText(m.sub, x + w / 2, y + 54);
+      ctx.fillStyle = on ? COL.accent : COL.inkDim;
+      ctx.fillText(m.bonus, x + w / 2, y + 73);
+    }
+
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.fillStyle = COL.inkDim;
+    ctx.fillText('← → 또는 클릭으로 선택', ctxW, C.Y0 + 368);
+
+    ctx.globalAlpha = 0.55 + Math.sin(this.time * 4) * 0.35;
+    ctx.font = 'bold 17px system-ui, sans-serif';
+    ctx.fillStyle = '#f0e6dc';
+    ctx.fillText('Space · Enter · 아래쪽 터치로 시작', ctxW, C.Y0 + 410);
+    ctx.globalAlpha = 1;
+
+    if (this.best > 0) {
+      ctx.font = '13px system-ui, sans-serif';
+      ctx.fillStyle = COL.inkDim;
+      ctx.fillText('최고 점수  ' + pad(this.best, 5), ctxW, C.Y0 + 452);
+    }
+    ctx.restore();
+  };
+
+  Game.prototype.drawUpgrade = function (ctx) {
+    this.dim(ctx, 0.86);
+    var rects = this.cardRects();
+    ctx.save();
+    ctx.textAlign = 'center';
+
+    ctx.fillStyle = COL.accent;
+    ctx.font = 'bold 34px "Segoe UI", system-ui, sans-serif';
+    ctx.shadowColor = COL.accent; ctx.shadowBlur = 18;
+    ctx.fillText('방 ' + this.room + ' 돌파', C.W / 2, rects[0].y - 78);
+    ctx.shadowBlur = 0;
+    ctx.font = '15px system-ui, sans-serif';
+    ctx.fillStyle = COL.ink;
+    ctx.fillText('능력 하나를 고른다', C.W / 2, rects[0].y - 48);
+
+    for (var i = 0; i < this.choices.length; i++) {
+      var u = this.choices[i], r = rects[i];
+      var hover = I.pointer.x >= r.x && I.pointer.x <= r.x + r.w &&
+                  I.pointer.y >= r.y && I.pointer.y <= r.y + r.h;
+      var stacks = this.taken[u.id] || 0;
+
+      ctx.fillStyle = hover ? 'rgba(255,179,71,0.18)' : 'rgba(255,255,255,0.05)';
+      rr(ctx, r.x, r.y, r.w, r.h, 14); ctx.fill();
+      ctx.strokeStyle = hover ? COL.accent : 'rgba(255,255,255,0.16)';
+      ctx.lineWidth = hover ? 2.5 : 1.5;
+      rr(ctx, r.x, r.y, r.w, r.h, 14); ctx.stroke();
+
+      ctx.fillStyle = COL.accent;
+      ctx.font = '40px system-ui, sans-serif';
+      ctx.fillText(u.icon, r.x + r.w / 2, r.y + 66);
+
+      ctx.fillStyle = '#f0e6dc';
+      ctx.font = 'bold 20px system-ui, sans-serif';
+      ctx.fillText(u.name, r.x + r.w / 2, r.y + 112);
+
+      ctx.fillStyle = COL.ink;
+      ctx.font = '13px system-ui, sans-serif';
+      wrapText(ctx, u.desc, r.x + r.w / 2, r.y + 142, r.w - 24, 19);
+
+      if (stacks > 0) {
+        ctx.fillStyle = COL.inkDim;
+        ctx.font = '12px system-ui, sans-serif';
+        ctx.fillText('보유 ' + stacks + (u.max < 90 ? ' / ' + u.max : ''), r.x + r.w / 2, r.y + r.h - 34);
+      }
+      ctx.fillStyle = COL.inkDim;
+      ctx.font = 'bold 13px system-ui, sans-serif';
+      ctx.fillText('[' + (i + 1) + ']', r.x + r.w / 2, r.y + r.h - 14);
+    }
+    ctx.restore();
+  };
+
+  function wrapText(ctx, text, cx, y, maxW, lh) {
+    var words = text.split(' '), line = '', lines = [];
+    for (var i = 0; i < words.length; i++) {
+      var test = line ? line + ' ' + words[i] : words[i];
+      if (ctx.measureText(test).width > maxW && line) { lines.push(line); line = words[i]; }
+      else line = test;
+    }
+    if (line) lines.push(line);
+    for (var j = 0; j < lines.length; j++) ctx.fillText(lines[j], cx, y + j * lh);
+  }
+
+  Game.prototype.drawDead = function (ctx) {
+    this.drawPanel(ctx, '쓰러졌다', [
+      '도달한 방  ' + this.room,
+      '처치  ' + this.kills + '  ·  점수  ' + pad(this.score, 5),
+      '획득한 능력  ' + this.takenOrder.length + '종',
+      this.newBest ? '★ 최고 기록 갱신 ★' : '최고  ' + pad(this.best, 5)
+    ], 'Space · 화면 터치로 타이틀', COL.hpLow);
   };
 
   Game.STATE = STATE;

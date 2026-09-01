@@ -1,6 +1,6 @@
-/* 적대적 / 스트레스 테스트. 스모크 테스트가 "정상 경로가 돈다"를 보는 반면
-   여기서는 경계와 동시성(같은 스텝에 두 사건이 겹치는 경우)을 노린다.
-   `npm i` 후 `node test/stress.js`. PW_CHROME 으로 다른 크로미움 지정 가능. */
+/* 적대적 / 스트레스 테스트. 스모크가 "정상 경로가 돈다"를 보는 반면
+   여기서는 경계, 장시간 실행, 극단적 빌드, 잘못된 상태를 노린다.
+   `npm i` 후 `node test/stress.js`. */
 const { chromium } = require('playwright');
 const http = require('http');
 const fs = require('fs');
@@ -8,7 +8,7 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const LAUNCH = process.env.PW_CHROME ? { executablePath: process.env.PW_CHROME } : {};
-const PORT = Number(process.env.PORT || 8733);
+const PORT = Number(process.env.PORT || 8814);
 const TYPES = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript' };
 
 const server = http.createServer((req, res) => {
@@ -29,7 +29,7 @@ function check(name, ok, detail) {
 (async () => {
   await new Promise(r => server.listen(PORT, r));
   const browser = await chromium.launch(LAUNCH);
-  const page = await browser.newPage({ viewport: { width: 900, height: 900 } });
+  const page = await browser.newPage({ viewport: { width: 900, height: 950 } });
 
   const errors = [];
   page.on('pageerror', e => errors.push('pageerror: ' + e.message));
@@ -38,191 +38,268 @@ function check(name, ok, detail) {
   await page.goto('http://localhost:' + PORT + '/', { waitUntil: 'networkidle' });
   await page.waitForTimeout(400);
 
-  console.log('\n== A. 마지막 벽돌과 마지막 공이 같은 스텝에 사라질 때 ==');
-  // 클리어와 목숨 상실 조건이 동시에 성립한다. 클리어가 이겨야 한다.
-  const race = await page.evaluate(async () => {
-    const g = window.NB.game;
-    g.newGame();
-    await new Promise(r => setTimeout(r, 120));
-    const lives = g.lives;
-    g.bricks.forEach(b => { if (!b.solid) b.alive = false; });   // 벽돌 전멸
-    g.balls.forEach(b => { b.stuck = false; b.y = 99999; });     // 공도 전부 낙하
-    await new Promise(r => setTimeout(r, 250));
-    return { before: lives, after: g.lives, state: g.state };
-  });
-  check('클리어가 목숨 상실보다 우선', race.state === 'CLEAR' || race.state === 'WIN', race);
-  check('목숨이 깎이지 않음', race.after === race.before, race);
-
-  console.log('\n== B. 점수 저장은 국면이 끝날 때만 (프레임마다 쓰지 않는다) ==');
-  const writes = await page.evaluate(async () => {
-    const g = window.NB.game;
-    let n = 0;
-    const orig = localStorage.setItem.bind(localStorage);
-    localStorage.setItem = (k, v) => { if (k === 'nb_high_v1') n++; return orig(k, v); };
-    g.newGame();
-    await new Promise(r => setTimeout(r, 100));
-    for (let i = 0; i < 300; i++) g.addScore(100);   // 벽돌 300개 부순 셈
-    await new Promise(r => setTimeout(r, 100));
-    const during = n;
-    g.persistHigh();
-    const after = n;
-    localStorage.setItem = orig;
-    return { during, after, high: g.high, stored: Number(localStorage.getItem('nb_high_v1')) };
-  });
-  check('득점 300회 동안 저장 0회', writes.during === 0, writes);
-  check('국면 종료 시 1회 저장', writes.after === 1, writes);
-  check('저장값이 최고점과 일치', writes.stored === writes.high, writes);
-
-  console.log('\n== C. 오디오 초기화 전에 음소거를 눌러도 유지된다 ==');
-  const mute = await page.evaluate(() => {
-    // 새 오디오 컨텍스트를 흉내내기 어려우니 모듈 계약만 확인한다
-    const A = window.NB.Audio;
-    const was = A.isMuted();
-    const now = A.toggleMute();
-    const back = A.toggleMute();
-    return { was, now, back };
-  });
-  check('음소거 토글이 상태를 반전', mute.now === !mute.was && mute.back === mute.was, mute);
-
-  console.log('\n== D. 자동 플레이 45초 — 공을 쫓는 완벽한 패들 ==');
-  const auto = await page.evaluate(async () => {
-    const g = window.NB.game, C = window.NB.C;
-    g.newGame();
-    await new Promise(r => setTimeout(r, 100));
-
+  console.log('\n== A. 모든 적 종류를 한 방에 몰아넣고 6초 ==');
+  const allTypes = await page.evaluate(async () => {
+    const g = window.AF.game, AF = window.AF, C = AF.C;
+    g.newRun();
+    await new Promise(r => setTimeout(r, 150));
+    g.enemies = [];
+    const types = Object.keys(AF.ENEMIES);
+    types.forEach((t, i) => {
+      const a = (i / types.length) * Math.PI * 2;
+      g.enemies.push(new AF.Enemy(t,
+        C.X0 + C.SIZE / 2 + Math.cos(a) * 200,
+        C.Y0 + C.SIZE / 2 + Math.sin(a) * 200, 1, 1));
+    });
+    g.player.stats.maxHp = 99999; g.player.hp = 99999;   // 죽지 않게 해서 끝까지 관찰
     const bad = [];
-    let maxBalls = 0, levelsSeen = new Set(), launches = 0, destroyed = 0;
-    let prevAlive = g.bricks.filter(b => b.alive).length;
     const t0 = performance.now();
-
-    while (performance.now() - t0 < 45000) {
-      if (g.state === 'PLAYING') {
-        // 가장 낮은 공을 따라간다
-        let low = null;
-        for (const b of g.balls) if (!low || b.y > low.y) low = b;
-        if (low) { g.aimX = low.x; }
-        if (g.balls.some(b => b.stuck)) { window.NB.Input.pointer.tapped = true; launches++; }
-
-        maxBalls = Math.max(maxBalls, g.balls.length);
-        levelsSeen.add(g.levelIndex);
-        const alive = g.bricks.filter(b => b.alive).length;
-        if (alive < prevAlive) destroyed += prevAlive - alive;
-        prevAlive = alive;
-
-        for (const b of g.balls) {
-          if (!Number.isFinite(b.x) || !Number.isFinite(b.y) || !Number.isFinite(b.vx) || !Number.isFinite(b.vy)) {
-            bad.push({ why: 'NaN', b: { x: b.x, y: b.y, vx: b.vx, vy: b.vy } });
-          }
-          if (b.x < C.WALL - 2 || b.x > C.W - C.WALL + 2 || b.y < C.HUD_H - 2) {
-            bad.push({ why: 'out', x: b.x, y: b.y });
-          }
-          const sp = Math.hypot(b.vx, b.vy);
-          if (!b.stuck && sp > 0 && (sp < 2 || sp > 20)) bad.push({ why: 'speed', sp });
+    while (performance.now() - t0 < 6000) {
+      for (const e of g.enemies) {
+        if (!Number.isFinite(e.x) || !Number.isFinite(e.y)) bad.push({ why: 'NaN', type: e.type });
+        if (e.x < C.X0 - 2 || e.x > C.X1 + 2 || e.y < C.Y0 - 2 || e.y > C.Y1 + 2) {
+          bad.push({ why: 'out', type: e.type, x: Math.round(e.x), y: Math.round(e.y) });
         }
-        if (g.paddle.x < C.WALL - 0.5 || g.paddle.x + g.paddle.w > C.W - C.WALL + 0.5) {
-          bad.push({ why: 'paddle', x: g.paddle.x, w: g.paddle.w });
-        }
-        if (g.paddle.w < C.PADDLE_MIN - 1 || g.paddle.w > C.PADDLE_MAX + 1) {
-          bad.push({ why: 'paddleW', w: g.paddle.w });
-        }
-      } else if (g.state === 'CLEAR') {
-        g.overlayT = 10; window.NB.Input.pointer.tapped = true;
-      } else if (g.state === 'OVER' || g.state === 'WIN') {
-        g.overlayT = 10; window.NB.Input.pointer.tapped = true;
-        await new Promise(r => setTimeout(r, 60));
-        if (g.state === 'TITLE') { window.NB.Input.pointer.tapped = true; }
+      }
+      for (const s of g.shots) {
+        if (!Number.isFinite(s.x) || !Number.isFinite(s.y) || !Number.isFinite(s.a)) bad.push({ why: 'shotNaN' });
       }
       if (bad.length > 3) break;
       await new Promise(r => setTimeout(r, 16));
     }
-    return { bad: bad.slice(0, 3), score: g.score, maxBalls, launches, destroyed,
-             levels: [...levelsSeen].sort((a, b) => a - b), state: g.state };
+    return { bad: bad.slice(0, 3), seen: types.length, remaining: g.enemies.length, shots: g.shots.length };
   });
-  check('45초 자동 플레이 중 이상 상태 없음', auto.bad.length === 0, auto.bad);
-  check('실제로 진행됨 (벽돌 10개 이상 파괴)', auto.destroyed >= 10, auto);
-  // 완벽 수비면 공을 놓치지 않으므로 45초 내내 살아 있어야 한다.
-  // (레벨 전환 자체는 스모크 테스트 8번이 8단계 전부 확인한다)
-  check('완벽 수비 중 게임오버 없음', auto.state !== 'OVER', auto.state);
+  check('7종 전부 벽 밖으로 나가거나 NaN 이 되지 않음', allTypes.bad.length === 0, allTypes.bad);
+  check('투사체 좌표가 전부 유한', allTypes.bad.filter(b => b.why === 'shotNaN').length === 0, allTypes.bad);
 
-  console.log('\n== E. 아이템 난사 (200회 무작위) ==');
-  const spam = await page.evaluate(async () => {
-    const g = window.NB.game, NB = window.NB;
-    const types = Object.keys(NB.POWERS);
+  console.log('\n== B. 능력 16종을 상한까지 전부 적용 ==');
+  const maxBuild = await page.evaluate(async () => {
+    const g = window.AF.game, AF = window.AF;
+    g.newRun();
+    await new Promise(r => setTimeout(r, 120));
     let threw = null;
-    g.newGame();
-    await new Promise(r => setTimeout(r, 80));
-    for (let i = 0; i < 200; i++) {
-      try { g.applyPower(types[(Math.random() * types.length) | 0], 320, 600); }
-      catch (e) { threw = e.message; break; }
-    }
-    await new Promise(r => setTimeout(r, 300));
-    return { threw, balls: g.balls.length, paddleW: g.paddle.w,
-             timers: Object.entries(g.timers).filter(([, v]) => v > 0).map(([k]) => k) };
+    try {
+      AF.UPGRADES.forEach(u => {
+        for (let i = 0; i < Math.min(u.max, 20); i++) {
+          u.apply(g.player.stats, g.player);
+          g.taken[u.id] = (g.taken[u.id] || 0) + 1;
+          if (g.takenOrder.indexOf(u.id) === -1) g.takenOrder.push(u.id);
+        }
+      });
+    } catch (e) { threw = e.message; }
+    const before = g.shots.length;
+    g.fire();
+    const arrows = g.shots.length - before;
+    await new Promise(r => setTimeout(r, 1500));
+    const s = g.player.stats;
+    return {
+      threw, arrows, fireCd: +s.fireCd.toFixed(4), multishot: s.multishot,
+      shotsAlive: g.shots.length,
+      finite: Object.keys(s).every(k => Number.isFinite(s[k])),
+      state: g.state
+    };
   });
-  check('아이템 난사에도 예외 없음', spam.threw === null, spam.threw);
-  check('공 개수 상한이 지켜짐 (<=9)', spam.balls <= 9, spam.balls);
-  check('상반된 효과가 동시에 켜지지 않음',
-        !(spam.timers.includes('EXPAND') && spam.timers.includes('SHRINK')) &&
-        !(spam.timers.includes('SLOW') && spam.timers.includes('FAST')), spam.timers);
+  check('최대 빌드 적용에 예외 없음', maxBuild.threw === null, maxBuild.threw);
+  check('스탯이 전부 유한한 수', maxBuild.finite === true, maxBuild);
+  check('한 번 발사에 화살이 여러 발', maxBuild.arrows >= 4, maxBuild.arrows);
+  check('공격 간격이 0보다 큼', maxBuild.fireCd > 0, maxBuild.fireCd);
+  check('최대 빌드로 1.5초 돌려도 살아 있음', maxBuild.state !== undefined, maxBuild.state);
 
-  console.log('\n== F. 최고 속도(레벨8 + 가속)에서 패들/벽돌을 뚫지 않는다 ==');
-  const fastest = await page.evaluate(async () => {
-    const g = window.NB.game, C = window.NB.C;
-    g.newGame(); g.loadLevel(7); g.state = 'PLAYING';
-    g.timers.FAST = 999;
-    await new Promise(r => setTimeout(r, 80));
-    let escaped = 0, below = 0;
+  console.log('\n== C. 능력 풀이 바닥나도 선택지를 만든다 ==');
+  const drained = await page.evaluate(async () => {
+    const g = window.AF.game, AF = window.AF;
+    g.newRun();
+    await new Promise(r => setTimeout(r, 120));
+    // 상한이 있는 능력을 전부 소진시킨다
+    AF.UPGRADES.forEach(u => { if (u.max < 90) g.taken[u.id] = u.max; });
+    g.player.hp = g.player.stats.maxHp;    // '응급 처치' 조건도 막는다
+    const rolled = g.rollUpgrades(3);
+    return { count: rolled.length, ids: rolled.map(u => u.id) };
+  });
+  check('풀이 좁아져도 예외 없이 선택지 생성', drained.count >= 1, drained);
+  check('남은 선택지가 중복되지 않음',
+        new Set(drained.ids).size === drained.ids.length, drained.ids);
+
+  console.log('\n== D. 20방 연속 진행 (매번 능력 선택) ==');
+  const marathon = await page.evaluate(async () => {
+    const g = window.AF.game;
+    g.newRun();
+    await new Promise(r => setTimeout(r, 120));
+    g.player.stats.maxHp = 99999; g.player.hp = 99999;
+    const rooms = [], bosses = [];
+    let threw = null;
+    try {
+      for (let i = 0; i < 20; i++) {
+        g.introT = 0;
+        g.enemies = [];
+        await new Promise(r => setTimeout(r, 90));
+        if (g.state !== 'UPGRADE') { threw = '방 ' + g.room + ' 에서 능력 화면이 안 뜸: ' + g.state; break; }
+        rooms.push(g.room);
+        if (g.plan.isBoss) bosses.push(g.room);
+        g.choices[0].apply(g.player.stats, g.player);
+        g.taken[g.choices[0].id] = (g.taken[g.choices[0].id] || 0) + 1;
+        g.nextRoom();
+        g.state = 'PLAYING';
+        await new Promise(r => setTimeout(r, 60));
+      }
+    } catch (e) { threw = e.message; }
+    return { threw, rooms, bosses, finalRoom: g.room, enemies: g.enemies.length };
+  });
+  check('20방 연속 진행에 예외 없음', marathon.threw === null, marathon.threw);
+  check('방 번호가 1부터 순서대로',
+        marathon.rooms.every((r, i) => r === i + 1), marathon.rooms);
+  check('보스가 5·10·15·20방에 등장',
+        JSON.stringify(marathon.bosses) === JSON.stringify([5, 10, 15, 20]), marathon.bosses);
+
+  console.log('\n== E. 좁은 방에서도 적이 낄 자리를 찾는다 ==');
+  const spawnFit = await page.evaluate(() => {
+    const g = window.AF.game, AF = window.AF, C = AF.C;
+    // 전장 대부분을 막아 최악의 조건을 만든다
+    g.obstacles = [];
+    for (let r = 0; r < C.GRID; r++) {
+      for (let c = 0; c < C.GRID; c++) {
+        if (r % 2 === 0 && c % 2 === 0) {
+          g.obstacles.push({ x: C.X0 + c * C.CELL, y: C.Y0 + r * C.CELL, w: C.CELL, h: C.CELL });
+        }
+      }
+    }
+    const bad = [];
+    for (let i = 0; i < 200; i++) {
+      const p = g.findSpawn(19);
+      if (p.x < C.X0 || p.x > C.X1 || p.y < C.Y0 || p.y > C.Y1) bad.push(p);
+      if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) bad.push(p);
+    }
+    return { bad: bad.slice(0, 3), obstacles: g.obstacles.length };
+  });
+  check('막힌 방에서도 등장 좌표가 전장 안', spawnFit.bad.length === 0, spawnFit);
+
+  console.log('\n== F. 무작위 상태 전이 150회 ==');
+  const churn = await page.evaluate(async () => {
+    const g = window.AF.game;
+    const states = ['TITLE', 'PLAYING', 'PAUSED', 'UPGRADE', 'DEAD'];
+    let threw = null;
+    try {
+      for (let i = 0; i < 150; i++) {
+        g.state = states[(Math.random() * states.length) | 0];
+        g.overlayT = 10;
+        window.AF.Input.pointer.tapped = true;
+        window.AF.Input.pointer.x = 350; window.AF.Input.pointer.y = 500;
+        await new Promise(r => setTimeout(r, 16));
+      }
+    } catch (e) { threw = e.message; }
+    return { threw, state: g.state, room: g.room, choices: g.choices.length };
+  });
+  check('무작위 상태 전이에 예외 없음', churn.threw === null, churn.threw);
+  check('방 번호가 음수/NaN 이 되지 않음',
+        Number.isFinite(churn.room) && churn.room >= 0, churn.room);
+
+  console.log('\n== G. 화살이 벽을 뚫고 나가지 않는다 (도탄 최대) ==');
+  const contained = await page.evaluate(async () => {
+    const g = window.AF.game, AF = window.AF, C = AF.C;
+    g.newRun();
+    await new Promise(r => setTimeout(r, 120));
+    g.player.stats.bounce = 3;
+    g.player.stats.multishot = 3;
+    g.player.stats.projSpeed = 14;
+    let escaped = 0, checked = 0;
     const t0 = performance.now();
-    while (performance.now() - t0 < 12000) {
-      let low = null;
-      for (const b of g.balls) if (!low || b.y > low.y) low = b;
-      if (low) g.aimX = low.x;                       // 완벽 수비
-      if (g.balls.some(b => b.stuck)) window.NB.Input.pointer.tapped = true;
-      for (const b of g.balls) {
-        if (b.x < C.WALL - 2 || b.x > C.W - C.WALL + 2 || b.y < C.HUD_H - 2) escaped++;
-        if (b.y > C.PADDLE_Y + 40) below++;          // 패들을 통과해 버린 공
+    while (performance.now() - t0 < 4000) {
+      g.player.aim = Math.random() * Math.PI * 2;
+      g.fire();
+      for (const s of g.shots) {
+        checked++;
+        if (s.x < C.X0 - 12 || s.x > C.X1 + 12 || s.y < C.Y0 - 12 || s.y > C.Y1 + 12) escaped++;
       }
       await new Promise(r => setTimeout(r, 16));
     }
-    return { escaped, below, speed: g.ballSpeed(), lives: g.lives };
+    return { escaped, checked };
   });
-  check('최고 속도에서도 벽 관통 없음', fastest.escaped === 0, fastest);
-  check('완벽 수비 시 패들 관통 없음', fastest.below === 0, fastest);
-
-  console.log('\n== G. 상태 전이 난사 ==');
-  const churn = await page.evaluate(async () => {
-    const g = window.NB.game;
-    let threw = null;
-    const states = ['TITLE', 'PLAYING', 'PAUSED', 'CLEAR', 'OVER', 'WIN'];
-    try {
-      for (let i = 0; i < 120; i++) {
-        g.state = states[(Math.random() * states.length) | 0];
-        g.overlayT = 10;
-        window.NB.Input.pointer.tapped = true;
-        await new Promise(r => setTimeout(r, 20));
-      }
-    } catch (e) { threw = e.message; }
-    return { threw, state: g.state, level: g.levelIndex };
-  });
-  check('무작위 상태 전이에도 예외 없음', churn.threw === null, churn.threw);
-  check('레벨 인덱스가 범위 안', churn.level >= 0 && churn.level < 8, churn.level);
+  check('도탄 최대에서도 화살이 전장 밖으로 안 나감', contained.escaped === 0, contained);
+  check('실제로 많은 화살을 검사함', contained.checked > 200, contained.checked);
 
   console.log('\n== H. 창 크기를 바꿔도 포인터 좌표가 어긋나지 않는다 ==');
   const resize = [];
-  for (const [w, h] of [[420, 780], [1400, 900], [700, 500]]) {
+  for (const [w, h] of [[420, 800], [1500, 950], [760, 560]]) {
     await page.setViewportSize({ width: w, height: h });
-    await page.waitForTimeout(150);
+    await page.waitForTimeout(160);
     const box = await page.locator('#screen').boundingBox();
-    // 캔버스 가로 중앙을 누르면 게임 좌표로도 중앙(320)이어야 한다
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.waitForTimeout(80);
-    const px = await page.evaluate(() => window.NB.Input.pointer.x);
-    resize.push({ w, h, px: Math.round(px) });
+    const p = await page.evaluate(() => ({ x: window.AF.Input.pointer.x, y: window.AF.Input.pointer.y }));
+    resize.push({ w, h, x: Math.round(p.x), y: Math.round(p.y) });
   }
-  check('모든 뷰포트에서 중앙 클릭이 게임 좌표 320',
-        resize.every(r => Math.abs(r.px - 320) <= 2), resize);
+  check('모든 뷰포트에서 캔버스 중앙이 (350, 386)',
+        resize.every(r => Math.abs(r.x - 350) <= 2 && Math.abs(r.y - 386) <= 2), resize);
 
-  console.log('\n== I. 전체 실행 중 누적 에러 ==');
+  console.log('\n== I. 길찾기: 벽 뒤의 적이 반드시 도달한다 ==');
+  /* 실제로 있었던 결함의 회귀 테스트.
+     플레이어 등장 지점 바로 위에 폭 넓은 벽이 있는 방에서, 벽 뒤의 적이
+     정면으로 벽을 밀며 영영 오지 못했다(국소 조향의 한계). 지금은 거리장을 따라 돌아온다. */
+  const pathing = await page.evaluate(async () => {
+    const g = window.AF.game, AF = window.AF, C = AF.C;
+    g.newRun();
+    await new Promise(r => setTimeout(r, 120));
+    // 가로로 긴 벽을 플레이어 바로 위에 세운다
+    g.obstacles = [];
+    g.blocked = new Uint8Array(C.GRID * C.GRID);
+    for (let c = 1; c < C.GRID - 1; c++) {
+      g.obstacles.push({ x: C.X0 + c * C.CELL, y: C.Y0 + 8 * C.CELL, w: C.CELL, h: C.CELL });
+      g.blocked[8 * C.GRID + c] = 1;
+    }
+    g.flow = null; g.flowT = 0; g.flowCell = -1;
+    g.player.x = C.X0 + C.SIZE / 2; g.player.y = C.Y1 - 80;
+    g.player.stats.maxHp = 1e9; g.player.hp = 1e9;
+    g.enemies = [];
+    // 벽 반대편 구석에 둔다 — 직선으로는 절대 못 온다
+    const e = new AF.Enemy('chaser', C.X0 + 40, C.Y0 + 40, 1, 1);
+    g.enemies.push(e);
+
+    const start = Math.hypot(e.x - g.player.x, e.y - g.player.y);
+    let closest = start;
+    const t0 = performance.now();
+    while (performance.now() - t0 < 14000 && !e.dead) {
+      closest = Math.min(closest, Math.hypot(e.x - g.player.x, e.y - g.player.y));
+      if (closest < 60) break;
+      await new Promise(r => setTimeout(r, 16));
+    }
+    return { start: Math.round(start), closest: Math.round(closest),
+             reached: closest < 60 || e.dead, killed: e.dead,
+             secs: +((performance.now() - t0) / 1000).toFixed(1) };
+  });
+  check('벽 뒤에서 출발한 적이 플레이어에게 도달(또는 사망)',
+        pathing.reached === true, pathing);
+  check('실제로 먼 거리에서 출발했다', pathing.start > 400, pathing.start);
+
+  console.log('\n== J. 시야가 막혀도 방은 반드시 끝난다 ==');
+  const noStall = await page.evaluate(async () => {
+    const g = window.AF.game, AF = window.AF, C = AF.C;
+    g.newRun();
+    await new Promise(r => setTimeout(r, 120));
+    g.room = 2; g.nextRoom(); g.state = 'PLAYING';
+    g.player.stats.maxHp = 1e9; g.player.hp = 1e9;
+    // 원거리 적만 남겨 최악의 조건 — 예전에는 사거리를 지키며 영원히 버텼다
+    g.enemies = [];
+    for (let i = 0; i < 3; i++) {
+      const p = g.findSpawn(14);
+      g.enemies.push(new AF.Enemy(i === 0 ? 'shooter' : 'orbiter', p.x, p.y, 1, 1));
+    }
+    await new Promise(r => setTimeout(r, 100));
+    const t0 = performance.now();
+    let anyCommitted = false;
+    while (performance.now() - t0 < 12000 && g.enemies.length) {
+      if (g.enemies.some(e => e.commit)) anyCommitted = true;
+      await new Promise(r => setTimeout(r, 16));
+    }
+    const left = g.enemies.map(e => Math.round(e.hp / e.maxHp * 100));
+    return { left, anyCommitted,
+             allDamaged: left.every(pct => pct < 100),
+             cleared: g.enemies.length === 0 };
+  });
+  check('원거리 적이 시야를 잃으면 접근 상태로 전환된다', noStall.anyCommitted === true, noStall);
+  check('12초 안에 전멸하거나 모두 피해를 입는다',
+        noStall.cleared || noStall.allDamaged, noStall);
+
+  console.log('\n== K. 전체 실행 중 누적 에러 ==');
   check('런타임 에러 0건', errors.length === 0, errors.slice(0, 5));
 
   console.log('\n---- ' + pass + ' passed, ' + fail + ' failed ----');

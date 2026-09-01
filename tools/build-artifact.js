@@ -1,9 +1,8 @@
 /* index.html 이 참조하는 CSS/JS 를 전부 인라인해 파일 한 장으로 묶는다.
-   결과는 Artifact 로 게시하거나 그냥 열어 볼 수 있다. 저장소가 원본이고
-   이 파일은 파생물이므로 dist/ 는 커밋하지 않는다.
+   저장소가 원본이고 이 결과물은 파생물이라 dist/ 는 커밋하지 않는다.
 
-     node tools/build-artifact.js            → dist/neon-breaker.html (아티팩트용 조각)
-     node tools/build-artifact.js --standalone → dist/neon-breaker-standalone.html
+     node tools/build-artifact.js              → dist/arrowfall.html (감싸기용 조각)
+     node tools/build-artifact.js --standalone → dist/arrowfall-standalone.html
 
    아티팩트용 조각에는 <!doctype>/<html>/<head>/<body> 를 넣지 않는다.
    게시할 때 감싸주기 때문에 직접 넣으면 중첩된다. */
@@ -46,7 +45,6 @@ body { min-height: 100dvh; }
   margin: 0;
   font-size: 12px;
   letter-spacing: 0.06em;
-  text-transform: uppercase;
   color: var(--accent);
   opacity: 0.85;
   transition: opacity 220ms ease;
@@ -75,47 +73,32 @@ const EMBED_JS = `
 })();
 `;
 
-// index.html 의 body 안쪽만 가져와 link/script 참조를 걷어낸다
 let body = html.split('<body>')[1].split('</body>')[0]
   .replace(/^\s*<script src="[^"]+"><\/script>\s*$/gm, '')
   .replace(/\n{3,}/g, '\n\n')
   .trim();
 
-// 캔버스 바로 아래에 포커스 안내를 끼운다
-body = body.replace('<p id="hint">',
+const bodyEmbed = body.replace('<p id="hint">',
   '<p id="focusnote">화면을 한 번 클릭하면 키보드가 연결됩니다</p>\n\n  <p id="hint">');
-
-const page =
-`<title>NEON BREAKER</title>
-<style>
-${css}
-${EMBED_CSS}</style>
-
-${body}
-
-<script>
-${js}
-${EMBED_JS}</script>
-`;
 
 fs.mkdirSync(OUT, { recursive: true });
 
 if (standalone) {
-  const file = path.join(OUT, 'neon-breaker-standalone.html');
+  const file = path.join(OUT, 'arrowfall-standalone.html');
   fs.writeFileSync(file,
 `<!DOCTYPE html>
 <html lang="ko">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-<meta name="theme-color" content="#05060f">
-${page.split('\n')[0]}
+<meta name="theme-color" content="#14121c">
+<title>ARROWFALL</title>
 <style>
 ${css}
 </style>
 </head>
 <body>
-${body.replace(/<p id="focusnote">[\s\S]*?<\/p>\s*/, '')}
+${body}
 <script>
 ${js}
 </script>
@@ -124,8 +107,19 @@ ${js}
 `);
   console.log('written: ' + path.relative(ROOT, file) + '  (' + (fs.statSync(file).size / 1024).toFixed(1) + ' KB)');
 } else {
-  const file = path.join(OUT, 'neon-breaker.html');
-  fs.writeFileSync(file, page);
+  const file = path.join(OUT, 'arrowfall.html');
+  fs.writeFileSync(file,
+`<title>ARROWFALL</title>
+<style>
+${css}
+${EMBED_CSS}</style>
+
+${bodyEmbed}
+
+<script>
+${js}
+${EMBED_JS}</script>
+`);
   console.log('written: ' + path.relative(ROOT, file) + '  (' + (fs.statSync(file).size / 1024).toFixed(1) + ' KB)');
   console.log('  css: ' + cssFiles.join(', '));
   console.log('  js : ' + jsFiles.join(', '));
