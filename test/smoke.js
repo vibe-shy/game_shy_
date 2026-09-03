@@ -75,6 +75,56 @@ function check(name, ok, detail) {
   check('적이 등장함', s.enemies > 0, s.enemies);
   check('체력이 가득', s.hp === s.maxHp, s);
 
+  console.log('\n== 3b. 실제 키보드로 이동 ==');
+  // 가상 스틱만 검증하면 키 입력 경로가 깨져도 통과한다. 진짜 키 이벤트로 본다.
+  const before = await snap();
+  const at = () => page.evaluate(() => ({
+    x: Math.round(window.AF.game.player.x), y: Math.round(window.AF.game.player.y)
+  }));
+  const p0 = await at();
+  await page.keyboard.down('w');
+  await page.waitForTimeout(600);
+  const pW = await at();
+  await page.keyboard.up('w');
+  await page.keyboard.down('d');
+  await page.waitForTimeout(600);
+  const pD = await at();
+  await page.keyboard.up('d');
+  await page.keyboard.down('ArrowLeft');
+  await page.waitForTimeout(600);
+  const pL = await at();
+  await page.keyboard.up('ArrowLeft');
+
+  check('W 로 위로 이동', pW.y < p0.y - 20, { p0, pW });
+  check('D 로 오른쪽 이동', pD.x > pW.x + 20, { pW, pD });
+  check('방향키(←)로 왼쪽 이동', pL.x < pD.x - 20, { pD, pL });
+  check('키를 떼면 멈춘다', await (async () => {
+    const a = await at(); await page.waitForTimeout(400); const b = await at();
+    return Math.abs(a.x - b.x) < 3 && Math.abs(a.y - b.y) < 3;
+  })());
+
+  console.log('\n== 3c. 포커스를 잃으면 멈추고 이유를 알린다 ==');
+  // 아티팩트는 iframe 안에서 돈다. 포커스가 없으면 키가 안 오는데
+  // 그대로 계속 돌면 "조작이 죽은 게임"으로 보인다.
+  const blurred = await page.evaluate(async () => {
+    const g = window.AF.game;
+    g.state = 'PLAYING';
+    window.dispatchEvent(new Event('blur'));
+    await new Promise(r => setTimeout(r, 150));
+    return { state: g.state, byBlur: g.pausedByBlur };
+  });
+  check('포커스를 잃으면 일시정지', blurred.state === 'PAUSED', blurred);
+  check('포커스 상실로 멈췄음을 구분해 기록', blurred.byBlur === true, blurred);
+  const canvasFocusable = await page.evaluate(() =>
+    document.getElementById('screen').getAttribute('tabindex'));
+  check('캔버스가 포커스를 받을 수 있음 (tabindex)', canvasFocusable === '0', canvasFocusable);
+
+  // 클릭으로 재개
+  const cbox = await page.locator('#screen').boundingBox();
+  await page.mouse.click(cbox.x + cbox.width / 2, cbox.y + cbox.height * 0.85);
+  await page.waitForTimeout(200);
+  check('클릭하면 다시 진행된다', (await snap()).state === 'PLAYING');
+
   console.log('\n== 4. 자동 발사 — 멈추면 쏘고 움직이면 안 쏜다 ==');
   const autoFire = await page.evaluate(async () => {
     const g = window.AF.game, I = window.AF.Input;
@@ -99,7 +149,13 @@ function check(name, ok, detail) {
 
   console.log('\n== 5. 수동 조준 — 움직이면서도 쏜다 ==');
   const manualFire = await page.evaluate(async () => {
-    const g = window.AF.game, I = window.AF.Input;
+    const g = window.AF.game, I = window.AF.Input, AF = window.AF;
+    // 앞 구간에서 적이 전멸해 방이 끝났을 수 있다. 이 검사에 필요한 상태를 직접 만든다.
+    if (g.state !== 'PLAYING') { g.state = 'PLAYING'; g.introT = 0; }
+    if (!g.enemies.length) {
+      const pos = g.findSpawn(13);
+      g.enemies.push(new AF.Enemy('chaser', pos.x, pos.y, 1, 1));
+    }
     g.mode = 'manual';
     let shots = 0;
     const orig = g.fire.bind(g);

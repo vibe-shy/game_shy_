@@ -47,6 +47,7 @@ AF.Game = (function () {
     this.overlayT = 0;
     this.introT = 0;
     this.newBest = false;
+    this.pausedByBlur = false;
 
     this.buildRoom(0);        // 타이틀 뒤에 깔 배경
   }
@@ -244,12 +245,15 @@ AF.Game = (function () {
         break;
 
       case STATE.PLAYING:
-        if (I.hit('KeyP') || I.hit('Escape')) { this.state = STATE.PAUSED; break; }
+        if (I.hit('KeyP') || I.hit('Escape')) { this.pause(false); break; }
         this.stepPlay();
         break;
 
       case STATE.PAUSED:
-        if (I.hit('KeyP') || I.hit('Escape') || I.confirm()) this.state = STATE.PLAYING;
+        if (I.hit('KeyP') || I.hit('Escape') || I.confirm()) {
+          this.state = STATE.PLAYING;
+          this.pausedByBlur = false;
+        }
         break;
 
       case STATE.UPGRADE:
@@ -262,6 +266,13 @@ AF.Game = (function () {
     }
 
     P.update();
+  };
+
+  /* byBlur: 포커스를 잃어 멈춘 경우. 안내 문구가 달라진다. */
+  Game.prototype.pause = function (byBlur) {
+    if (this.state !== STATE.PLAYING) return;
+    this.pausedByBlur = !!byBlur;
+    this.state = STATE.PAUSED;
   };
 
   Game.prototype.setMode = function (m) {
@@ -621,7 +632,14 @@ AF.Game = (function () {
 
     if (this.state === STATE.PLAYING && this.introT > 0) this.drawIntro(ctx);
     if (this.state === STATE.TITLE) this.drawTitle(ctx);
-    if (this.state === STATE.PAUSED) this.drawPanel(ctx, '일시정지', ['P · Esc · 화면 터치로 계속'], '');
+    if (this.state === STATE.PAUSED) {
+      // 포커스를 잃어 멈춘 경우엔 "키가 안 먹는" 이유를 알려 준다
+      this.drawPanel(ctx, '일시정지',
+        this.pausedByBlur
+          ? ['키보드 입력이 이 화면으로 오지 않고 있다', '화면을 한 번 클릭하면 이어서 진행된다']
+          : ['P · Esc · 화면 클릭으로 계속'],
+        this.pausedByBlur ? '화면 클릭' : '');
+    }
     if (this.state === STATE.UPGRADE) this.drawUpgrade(ctx);
     if (this.state === STATE.DEAD) this.drawDead(ctx);
   };

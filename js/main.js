@@ -40,8 +40,16 @@
   // 탭을 벗어나면 자동 일시정지 — 돌아왔을 때 죽어 있지 않도록
   document.addEventListener('visibilitychange', function () {
     if (document.hidden && game.state === AF.Game.STATE.PLAYING) {
-      game.state = AF.Game.STATE.PAUSED;
+      game.pause(false);
     }
+    last = 0; acc = 0;
+  });
+
+  /* 포커스를 잃었을 때도 멈춘다.
+     iframe(아티팩트) 안에서는 프레임이 포커스를 잃으면 키 이벤트가 끊긴다.
+     그대로 두면 적은 계속 오는데 조작만 죽어, 게임이 고장난 것처럼 보인다. */
+  AF.Input.onBlur(function () {
+    if (game.state === AF.Game.STATE.PLAYING) game.pause(true);
     last = 0; acc = 0;
   });
 

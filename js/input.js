@@ -14,6 +14,7 @@ AF.Input = (function () {
   var STICK_R = 62;   // 스틱을 최대로 기울였다고 보는 거리
 
   var pointer = { x: 350, y: 400, down: false, active: false, tapped: false };
+  var onBlur = null;
   var moveStick = { active: false, id: null, ox: 0, oy: 0, dx: 0, dy: 0 };
   var aimStick = { active: false, id: null, ox: 0, oy: 0, dx: 0, dy: 0 };
 
@@ -48,6 +49,13 @@ AF.Input = (function () {
   function attach(cv) {
     canvas = cv;
 
+    /* 캔버스를 포커스 대상으로 만든다.
+       아티팩트처럼 iframe 안에서 돌 때, 프레임이 포커스를 못 받으면 키 이벤트가
+       아예 도착하지 않는다. "캐릭터가 안 움직인다"의 가장 흔한 원인이다.
+       누를 때마다 명시적으로 포커스를 가져온다. */
+    canvas.setAttribute('tabindex', '0');
+    function grabFocus() { try { canvas.focus({ preventScroll: true }); } catch (e) { canvas.focus(); } }
+
     window.addEventListener('keydown', function (e) {
       if (TRACKED[e.code]) e.preventDefault();
       if (!keys[e.code]) pressed[e.code] = true;
@@ -55,11 +63,14 @@ AF.Input = (function () {
       AF.Audio.unlock();
     });
     window.addEventListener('keyup', function (e) { keys[e.code] = false; });
-    // 탭을 벗어나면 눌린 키가 남아 캐릭터가 혼자 걸어가는 걸 막는다
+    // 포커스를 잃으면 눌린 키가 남아 캐릭터가 혼자 걸어가는 걸 막는다.
+    // 더 중요한 건 게임에 알리는 것이다 — 조작만 죽은 채로 계속 돌면
+    // 화면상으로는 그냥 고장난 것처럼 보인다.
     window.addEventListener('blur', function () {
       keys = Object.create(null);
       releaseStick(moveStick); releaseStick(aimStick);
       pointer.down = false;
+      if (onBlur) onBlur();
     });
 
     canvas.addEventListener('mousemove', function (e) {
@@ -69,6 +80,7 @@ AF.Input = (function () {
     canvas.addEventListener('mouseleave', function () { pointer.active = false; pointer.down = false; });
     canvas.addEventListener('mousedown', function (e) {
       e.preventDefault();
+      grabFocus();
       var p = toLocal(e.clientX, e.clientY);
       pointer.x = p.x; pointer.y = p.y;
       pointer.active = true; pointer.down = true; pointer.tapped = true;
@@ -79,6 +91,7 @@ AF.Input = (function () {
 
     canvas.addEventListener('touchstart', function (e) {
       e.preventDefault();
+      grabFocus();
       AF.Audio.unlock();
       for (var i = 0; i < e.changedTouches.length; i++) {
         var t = e.changedTouches[i];
@@ -134,6 +147,8 @@ AF.Input = (function () {
 
   return {
     attach: attach,
+    /* 포커스를 잃었을 때 불릴 콜백. 게임이 일시정지하는 데 쓴다. */
+    onBlur: function (fn) { onBlur = fn; },
     STICK_R: STICK_R,
     held: function (c) { return !!keys[c]; },
     hit: function (c) { return !!pressed[c]; },
