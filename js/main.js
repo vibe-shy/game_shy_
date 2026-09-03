@@ -45,5 +45,25 @@
     last = 0; acc = 0;
   });
 
-  requestAnimationFrame(frame);
+  /* 캔버스는 서체가 준비되기 전에 그리면 조용히 대체 서체로 떨어진다.
+     Pretendard 는 data URI 라 네트워크를 타지 않지만 파싱은 비동기다.
+     준비될 때까지 기다리되, 어떤 이유로든 안 끝나면 그냥 시작한다 —
+     대체 서체로 도는 게 검은 화면보다 낫다. */
+  function start() {
+    if (started) return;
+    started = true;
+    requestAnimationFrame(frame);
+  }
+  var started = false;
+
+  if (document.fonts && document.fonts.load) {
+    var timeout = setTimeout(start, 1200);
+    Promise.all([
+      document.fonts.load('16px Pretendard'),
+      document.fonts.load('bold 16px Pretendard')
+    ]).catch(function () { /* 서체가 없어도 게임은 돌아야 한다 */ })
+      .then(function () { clearTimeout(timeout); start(); });
+  } else {
+    start();
+  }
 })();

@@ -73,6 +73,7 @@ npm start           # 또는 로컬 서버 — http://localhost:8080
 
 ```
 index.html          캔버스 한 장과 스크립트 로드
+css/font.css        Pretendard 서브셋 (생성물 — tools/build-font.js 가 만든다)
 css/style.css       캔버스를 화면에 맞추는 레이아웃만
 js/util.js          수학 · 원-사각형 충돌 · 가중치 뽑기
 js/audio.js         WebAudio 로 즉석 합성하는 효과음 (에셋 없음)
@@ -91,6 +92,31 @@ ES 모듈 대신 전역 `AF` 네임스페이스를 쓴다. `file://` 로 열었�
 
 물리는 화면 주사율과 무관하게 항상 1/60초 고정 스텝으로 돈다.
 120Hz 모니터에서 적이 두 배로 빨라지지 않는다.
+
+### 서체
+
+Pretendard 를 쓴다. 다만 CDN 링크가 아니라 **게임이 실제로 그리는 글자만 남긴
+서브셋을 data URI 로 심었다**(`css/font.css`). 이유는 두 가지다.
+
+- 저장소는 네트워크 없이 `file://` 로 열려야 한다. 외부 링크는 그 성질을 깬다.
+- 아티팩트로 게시할 때 CSP 가 외부 스타일시트를 `fonts.googleapis.com` 으로만
+  허용하는데 Pretendard 는 거기 없다. 링크로는 **오류 없이 조용히** 실패한다.
+
+두 굵기 원본 1521KB → 서브셋 34KB (289자, 한글 음절 156자).
+서체 스택은 `AF.FAMILY` 한 곳에만 있고 캔버스는 `AF.font(px, weight)` 로 쓴다.
+
+캔버스는 서체가 준비되기 전에 그리면 조용히 대체 서체로 떨어지므로,
+`document.fonts` 가 준비될 때까지 기다렸다가 루프를 시작한다(1.2초 뒤에는
+기다리지 않고 시작 — 대체 서체로 도는 게 검은 화면보다 낫다).
+
+**화면에 새 문구를 추가했으면 서브셋을 다시 만들어야 한다.**
+없는 글자는 오류 없이 대체 서체로 떨어져 눈치채기 어렵다.
+
+```bash
+node tools/build-font.js     # js/ 와 index.html 에서 글자를 다시 수집해 재생성
+```
+
+필요한 것: `pip install fonttools brotli`
 
 ### 길찾기
 
@@ -153,6 +179,8 @@ npm run test:stress   # 경계 / 장시간 / 극단 빌드 23개 항목
 node tools/build-artifact.js               # dist/arrowfall.html (감싸기용 조각)
 node tools/build-artifact.js --standalone  # dist/arrowfall-standalone.html (그냥 열면 됨)
 ```
+
+서체까지 인라인되므로 결과물은 네트워크 없이 혼자 돈다.
 
 `index.html` 이 참조하는 CSS/JS 를 적힌 순서대로 인라인한다.
 스크립트 태그 순서가 곧 의존 순서이므로, 파일을 추가하면 `index.html` 에만

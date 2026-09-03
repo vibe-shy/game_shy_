@@ -863,7 +863,7 @@ AF.Game = (function () {
     rr(ctx, bx, by, bw, 20, 10); ctx.fill();
     ctx.fillStyle = ratio > 0.3 ? COL.hp : COL.hpLow;
     rr(ctx, bx, by, Math.max(6, bw * ratio), 20, 10); ctx.fill();
-    ctx.font = 'bold 12px system-ui, sans-serif';
+    ctx.font = AF.font(12, 'bold');
     ctx.fillStyle = '#0b0a10';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
@@ -871,7 +871,7 @@ AF.Game = (function () {
 
     // 획득한 능력을 아이콘으로 나열
     ctx.textAlign = 'left';
-    ctx.font = '13px system-ui, sans-serif';
+    ctx.font = AF.font(13);
     var ix = bx, iy = by + 32;
     for (var i = 0; i < this.takenOrder.length && i < 14; i++) {
       var id = this.takenOrder[i];
@@ -888,13 +888,13 @@ AF.Game = (function () {
 
     // 방 / 처치 / 점수
     ctx.textAlign = 'right';
-    ctx.font = '11px system-ui, sans-serif';
+    ctx.font = AF.font(11);
     ctx.fillStyle = COL.inkDim;
     ctx.fillText('방', C.W - 268, 22);
     ctx.fillText('처치', C.W - 186, 22);
     ctx.fillText('점수', C.W - 20, 22);
 
-    ctx.font = 'bold 24px "Segoe UI", system-ui, sans-serif';
+    ctx.font = AF.font(24, 'bold');
     ctx.fillStyle = this.plan && this.plan.isBoss ? COL.hpLow : '#f0e6dc';
     ctx.fillText(String(this.room), C.W - 268, 46);
     ctx.fillStyle = '#f0e6dc';
@@ -902,7 +902,7 @@ AF.Game = (function () {
     ctx.fillStyle = this.newBest ? COL.accent : '#f0e6dc';
     ctx.fillText(pad(this.score, 5), C.W - 20, 46);
 
-    ctx.font = '10px system-ui, sans-serif';
+    ctx.font = AF.font(10);
     ctx.fillStyle = COL.inkDim;
     ctx.textAlign = 'right';
     ctx.fillText('최고 ' + pad(this.best, 5), C.W - 20, 62);
@@ -923,7 +923,7 @@ AF.Game = (function () {
       rr(ctx, x2, y2, w2, 14, 7); ctx.fill();
       ctx.fillStyle = COL.hpLow;
       rr(ctx, x2, y2, Math.max(4, w2 * (boss.hp / boss.maxHp)), 14, 7); ctx.fill();
-      ctx.font = 'bold 11px system-ui, sans-serif';
+      ctx.font = AF.font(11, 'bold');
       ctx.fillStyle = '#fff';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -937,7 +937,7 @@ AF.Game = (function () {
     ctx.save();
     ctx.globalAlpha = a;
     ctx.textAlign = 'center';
-    ctx.font = 'bold 40px "Segoe UI", system-ui, sans-serif';
+    ctx.font = AF.font(40, 'bold');
     ctx.fillStyle = this.plan.isBoss ? COL.hpLow : COL.accent;
     ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 20;
     ctx.fillText(this.plan.isBoss ? '보스' : '방 ' + this.room, C.W / 2, C.Y0 + C.SIZE / 2);
@@ -958,17 +958,17 @@ AF.Game = (function () {
     ctx.textAlign = 'center';
     ctx.fillStyle = color || COL.accent;
     ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 22;
-    ctx.font = 'bold 44px "Segoe UI", system-ui, sans-serif';
+    ctx.font = AF.font(44, 'bold');
     ctx.fillText(title, C.W / 2, cy);
     ctx.shadowBlur = 0;
-    ctx.font = '16px system-ui, sans-serif';
+    ctx.font = AF.font(16);
     ctx.fillStyle = COL.ink;
     for (var i = 0; i < lines.length; i++) {
       if (lines[i]) ctx.fillText(lines[i], C.W / 2, cy + 44 + i * 26);
     }
     if (hint) {
       ctx.globalAlpha = 0.55 + Math.sin(this.time * 4) * 0.35;
-      ctx.font = 'bold 15px system-ui, sans-serif';
+      ctx.font = AF.font(15, 'bold');
       ctx.fillStyle = '#f0e6dc';
       ctx.fillText(hint, C.W / 2, cy + 60 + lines.length * 26 + 16);
     }
@@ -983,17 +983,17 @@ AF.Game = (function () {
 
     ctx.fillStyle = COL.accent;
     ctx.shadowColor = COL.accent; ctx.shadowBlur = 26;
-    ctx.font = 'bold 58px "Segoe UI", system-ui, sans-serif';
+    ctx.font = AF.font(58, 'bold');
     ctx.fillText('ARROWFALL', ctxW, C.Y0 + 150);
     ctx.shadowBlur = 0;
 
-    ctx.font = '15px system-ui, sans-serif';
+    ctx.font = AF.font(15);
     ctx.fillStyle = COL.ink;
     ctx.fillText('방을 하나씩 돌파하며 능력을 쌓는 로그라이트', ctxW, C.Y0 + 186);
     ctx.fillText('5방마다 보스가 기다린다', ctxW, C.Y0 + 210);
 
     // 조작 모드 선택
-    ctx.font = '12px system-ui, sans-serif';
+    ctx.font = AF.font(12);
     ctx.fillStyle = COL.inkDim;
     ctx.fillText('조작 방식', ctxW, C.Y0 + 244);
 
@@ -1014,27 +1014,27 @@ AF.Game = (function () {
       rr(ctx, x, y, w, h, 12); ctx.stroke();
 
       ctx.fillStyle = on ? COL.accent : COL.ink;
-      ctx.font = 'bold 19px system-ui, sans-serif';
+      ctx.font = AF.font(19, 'bold');
       ctx.fillText(m.name, x + w / 2, y + 32);
-      ctx.font = '12px system-ui, sans-serif';
+      ctx.font = AF.font(12);
       ctx.fillStyle = COL.inkDim;
       ctx.fillText(m.sub, x + w / 2, y + 54);
       ctx.fillStyle = on ? COL.accent : COL.inkDim;
       ctx.fillText(m.bonus, x + w / 2, y + 73);
     }
 
-    ctx.font = '12px system-ui, sans-serif';
+    ctx.font = AF.font(12);
     ctx.fillStyle = COL.inkDim;
     ctx.fillText('← → 또는 클릭으로 선택', ctxW, C.Y0 + 368);
 
     ctx.globalAlpha = 0.55 + Math.sin(this.time * 4) * 0.35;
-    ctx.font = 'bold 17px system-ui, sans-serif';
+    ctx.font = AF.font(17, 'bold');
     ctx.fillStyle = '#f0e6dc';
     ctx.fillText('Space · Enter · 아래쪽 터치로 시작', ctxW, C.Y0 + 410);
     ctx.globalAlpha = 1;
 
     if (this.best > 0) {
-      ctx.font = '13px system-ui, sans-serif';
+      ctx.font = AF.font(13);
       ctx.fillStyle = COL.inkDim;
       ctx.fillText('최고 점수  ' + pad(this.best, 5), ctxW, C.Y0 + 452);
     }
@@ -1048,11 +1048,11 @@ AF.Game = (function () {
     ctx.textAlign = 'center';
 
     ctx.fillStyle = COL.accent;
-    ctx.font = 'bold 34px "Segoe UI", system-ui, sans-serif';
+    ctx.font = AF.font(34, 'bold');
     ctx.shadowColor = COL.accent; ctx.shadowBlur = 18;
     ctx.fillText('방 ' + this.room + ' 돌파', C.W / 2, rects[0].y - 78);
     ctx.shadowBlur = 0;
-    ctx.font = '15px system-ui, sans-serif';
+    ctx.font = AF.font(15);
     ctx.fillStyle = COL.ink;
     ctx.fillText('능력 하나를 고른다', C.W / 2, rects[0].y - 48);
 
@@ -1069,24 +1069,24 @@ AF.Game = (function () {
       rr(ctx, r.x, r.y, r.w, r.h, 14); ctx.stroke();
 
       ctx.fillStyle = COL.accent;
-      ctx.font = '40px system-ui, sans-serif';
+      ctx.font = AF.font(40);
       ctx.fillText(u.icon, r.x + r.w / 2, r.y + 66);
 
       ctx.fillStyle = '#f0e6dc';
-      ctx.font = 'bold 20px system-ui, sans-serif';
+      ctx.font = AF.font(20, 'bold');
       ctx.fillText(u.name, r.x + r.w / 2, r.y + 112);
 
       ctx.fillStyle = COL.ink;
-      ctx.font = '13px system-ui, sans-serif';
+      ctx.font = AF.font(13);
       wrapText(ctx, u.desc, r.x + r.w / 2, r.y + 142, r.w - 24, 19);
 
       if (stacks > 0) {
         ctx.fillStyle = COL.inkDim;
-        ctx.font = '12px system-ui, sans-serif';
+        ctx.font = AF.font(12);
         ctx.fillText('보유 ' + stacks + (u.max < 90 ? ' / ' + u.max : ''), r.x + r.w / 2, r.y + r.h - 34);
       }
       ctx.fillStyle = COL.inkDim;
-      ctx.font = 'bold 13px system-ui, sans-serif';
+      ctx.font = AF.font(13, 'bold');
       ctx.fillText('[' + (i + 1) + ']', r.x + r.w / 2, r.y + r.h - 14);
     }
     ctx.restore();

@@ -2,6 +2,16 @@
 var AF_ROOT = typeof window !== 'undefined' ? window : globalThis;   // node 로 검증만 돌릴 수 있게
 var AF = AF_ROOT.AF || (AF_ROOT.AF = {});
 
+/* 서체는 한 곳에서만 정한다. 캔버스 font 문자열에 스택을 26군데 적어 두면
+   하나만 고쳐도 화면이 어긋난다.
+   Pretendard 서브셋에 없는 글자는 뒤의 대체 서체로 조용히 넘어간다. */
+AF.FAMILY = 'Pretendard, -apple-system, BlinkMacSystemFont, system-ui, ' +
+            '"Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif';
+
+AF.font = function (px, weight) {
+  return (weight ? weight + ' ' : '') + px + 'px ' + AF.FAMILY;
+};
+
 AF.clamp = function (v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); };
 AF.lerp = function (a, b, t) { return a + (b - a) * t; };
 AF.rand = function (a, b) { return a + Math.random() * (b - a); };

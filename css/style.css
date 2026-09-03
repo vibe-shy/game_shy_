@@ -14,7 +14,8 @@ html, body {
   height: 100%;
   background: var(--bg);
   color: var(--ink);
-  font-family: "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif;
+  font-family: Pretendard, -apple-system, BlinkMacSystemFont, system-ui,
+               "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
   overflow: hidden;
   overscroll-behavior: none;
   -webkit-tap-highlight-color: transparent;
