@@ -8,7 +8,8 @@
     "test": "node test/content.test.js",
     "test:browser": "node test/smoke.js",
     "test:stress": "node test/stress.js",
-    "build": "node tools/build-artifact.js && node tools/build-artifact.js --standalone"
+    "build": "node tools/build-sprites.js && node tools/build-artifact.js && node tools/build-artifact.js --standalone",
+    "build:sprites": "node tools/build-sprites.js"
   },
   "devDependencies": {
     "playwright": "^1.49.0"

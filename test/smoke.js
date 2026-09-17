@@ -58,6 +58,29 @@ function check(name, ok, detail) {
   check('타이틀 배경에 방이 깔려 있음', s.obstacles > 0, s.obstacles);
   await shot('01-title');
 
+  console.log('\n== 1b. 스프라이트 ==');
+  const sp = await page.evaluate(() => ({
+    ready: window.AF.Sprites.isReady(),
+    loaded: window.AF.Sprites.count(),
+    declared: Object.keys(window.AF.SPRITES).length,
+    missing: Object.keys(window.AF.SPRITES).filter(k => !window.AF.Sprites.has(k))
+  }));
+  check('스프라이트 로더 완료', sp.ready === true, sp);
+  check('선언한 스프라이트가 모두 로드됨', sp.missing.length === 0, sp);
+  // 스프라이트는 선택 사항이다 — 없어도 도형으로 굴러가야 한다
+  const fallback = await page.evaluate(async () => {
+    const g = window.AF.game;
+    const realHas = window.AF.Sprites.has, realDraw = window.AF.Sprites.draw;
+    window.AF.Sprites.has = () => false;
+    window.AF.Sprites.draw = () => false;
+    const t0 = g.time;
+    await new Promise(r => setTimeout(r, 300));
+    const advanced = g.time > t0;
+    window.AF.Sprites.has = realHas; window.AF.Sprites.draw = realDraw;
+    return advanced;
+  });
+  check('스프라이트를 꺼도 게임이 계속 돈다 (도형 폴백)', fallback === true);
+
   console.log('\n== 2. 조작 모드 전환 ==');
   await page.keyboard.press('ArrowRight');
   await page.waitForTimeout(100);

@@ -88,5 +88,51 @@ Object.keys(AF.ENEMIES).forEach(function (k) {
   check('21방 안에서 모든 적 종류가 등장', types.size >= 5, [...types]);
 })();
 
+// ---- 스프라이트 매니페스트와 에셋
+(function () {
+  const fs = require('fs');
+  const root = path.join(__dirname, '..');
+  const src = fs.readFileSync(path.join(root, 'js', 'sprites.js'), 'utf8');
+  const block = src.match(/AF\.SPRITES = \{([\s\S]*?)\n\};/);
+  check('AF.SPRITES 매니페스트를 찾음', !!block);
+  if (!block) return;
+
+  const keys = [...block[1].matchAll(/'([\w-]+)':\s*\{([^}]*)\}/g)];
+  check('스프라이트 키가 1개 이상', keys.length > 0, keys.length);
+  check('키 중복 없음',
+        new Set(keys.map(m => m[1])).size === keys.length, keys.map(m => m[1]));
+
+  keys.forEach(([, key, body]) => {
+    const face = (body.match(/face:\s*'(\w+)'/) || [])[1];
+    check('스프라이트 ' + key + ': face 가 rotate/flip/none',
+          ['rotate', 'flip', 'none'].indexOf(face) !== -1, face);
+  });
+
+  // 적 종류마다 대응하는 스프라이트 키가 있어야 한다.
+  // 없으면 그 적만 조용히 도형으로 그려져 눈치채기 어렵다.
+  const declared = new Set(keys.map(m => m[1]));
+  Object.keys(AF.ENEMIES).forEach(t => {
+    check('적 ' + t + ' 의 스프라이트 키가 선언됨', declared.has('enemy-' + t), t);
+  });
+
+  // 매니페스트 키와 assets/ 파일이 맞물리는지
+  const assets = path.join(root, 'assets');
+  const onDisk = fs.existsSync(assets)
+    ? fs.readdirSync(assets).filter(f => f.endsWith('.png')).map(f => f.replace(/\.png$/, ''))
+    : [];
+  const orphan = onDisk.filter(k => !declared.has(k));
+  check('assets/ 에 매니페스트가 모르는 파일이 없음', orphan.length === 0, orphan);
+
+  // 생성물이 최신인지 — 선언한 키가 sprite-data.js 에 들어 있는가
+  const dataFile = path.join(root, 'js', 'sprite-data.js');
+  if (fs.existsSync(dataFile) && onDisk.length) {
+    const data = fs.readFileSync(dataFile, 'utf8');
+    const inData = onDisk.filter(k => declared.has(k) && data.indexOf('"' + k + '"') !== -1);
+    check('sprite-data.js 가 최신 (assets 의 스프라이트를 모두 담음)',
+          inData.length === onDisk.filter(k => declared.has(k)).length,
+          { onDisk: onDisk.length, inData: inData.length });
+  }
+})();
+
 console.log(fail ? '\n' + fail + '건 실패' : '\n전부 통과');
 process.exit(fail ? 1 : 0);

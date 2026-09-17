@@ -645,11 +645,23 @@ AF.Game = (function () {
   };
 
   Game.prototype.drawFloor = function (ctx) {
-    // 격자 바닥. 두 톤을 번갈아 깔아 이동 거리가 눈에 들어오게 한다.
+    // 격자 바닥. 스프라이트가 있으면 타일로 깔고, 없으면 두 톤을 번갈아 칠한다.
+    // (두 톤을 쓰는 이유는 이동 거리가 눈에 들어오게 하려는 것)
+    var tiled = AF.Sprites.has('floor');
     for (var r = 0; r < C.GRID; r++) {
       for (var c = 0; c < C.GRID; c++) {
-        ctx.fillStyle = (r + c) % 2 ? COL.floor : COL.floorAlt;
-        ctx.fillRect(C.X0 + c * C.CELL, C.Y0 + r * C.CELL, C.CELL, C.CELL);
+        var tx = C.X0 + c * C.CELL, ty = C.Y0 + r * C.CELL;
+        if (tiled) {
+          AF.Sprites.draw(ctx, 'floor', tx + C.CELL / 2, ty + C.CELL / 2, C.CELL);
+          // 타일 한 장만으로는 격자 리듬이 죽으니 한 칸 걸러 살짝 어둡게
+          if ((r + c) % 2) {
+            ctx.fillStyle = 'rgba(0,0,0,0.16)';
+            ctx.fillRect(tx, ty, C.CELL, C.CELL);
+          }
+        } else {
+          ctx.fillStyle = (r + c) % 2 ? COL.floor : COL.floorAlt;
+          ctx.fillRect(tx, ty, C.CELL, C.CELL);
+        }
       }
     }
     // 방 테두리
@@ -668,6 +680,7 @@ AF.Game = (function () {
   Game.prototype.drawObstacles = function (ctx) {
     for (var i = 0; i < this.obstacles.length; i++) {
       var o = this.obstacles[i];
+      if (AF.Sprites.draw(ctx, 'wall', o.x + o.w / 2, o.y + o.h / 2, o.w)) continue;
       ctx.fillStyle = COL.wall;
       rr(ctx, o.x + 2, o.y + 2, o.w - 4, o.h - 4, 6);
       ctx.fill();
@@ -686,6 +699,11 @@ AF.Game = (function () {
     for (var i = 0; i < this.shots.length; i++) {
       var s = this.shots[i];
       if (!!s.friendly !== friendly) continue;
+
+      // 화살은 길쭉해서 스프라이트를 반지름의 6배로 그린다(촉과 깃이 다 들어가게)
+      var key = s.friendly ? 'arrow' : 'bolt';
+      if (AF.Sprites.draw(ctx, key, s.x, s.y, s.r * (s.friendly ? 6 : 3.4), s.a)) continue;
+
       ctx.save();
       ctx.translate(s.x, s.y);
       ctx.rotate(s.a);
@@ -733,6 +751,29 @@ AF.Game = (function () {
         ctx.lineTo(e.x + Math.cos(e.dashA) * 300, e.y + Math.sin(e.dashA) * 300);
         ctx.stroke();
         ctx.restore();
+      }
+
+      var spriteKey = AF.spriteKeyFor(e.type);
+      if (AF.Sprites.has(spriteKey)) {
+        var toP = Math.atan2(this.player.y - e.y, this.player.x - e.x);
+        var size = e.r * 2 * (AF.SPRITES[spriteKey].scale || 2.15);
+
+        // 둔화는 색을 바꾸는 대신 발밑 링으로 알린다.
+        // 스프라이트를 물들이려면 오프스크린 캔버스가 필요한데, 그만한 값이 없다.
+        if (e.slowT > 0) {
+          ctx.save();
+          ctx.strokeStyle = 'rgba(126,200,255,0.75)';
+          ctx.lineWidth = 2.5;
+          ctx.beginPath();
+          ctx.arc(e.x, e.y, e.r + 4, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        AF.Sprites.draw(ctx, spriteKey, e.x, e.y, size, toP, Math.cos(toP) < 0);
+        if (e.flash > 0) AF.Sprites.flash(ctx, spriteKey, e.x, e.y, size, e.flash, toP, Math.cos(toP) < 0);
+        this.drawEnemyBar(ctx, e);
+        continue;
       }
 
       ctx.save();
@@ -783,15 +824,19 @@ AF.Game = (function () {
       }
       ctx.restore();
 
-      // 피해를 입은 적만 체력 막대를 보여 준다 (평소엔 화면이 지저분해진다)
-      if (e.hp < e.maxHp && d.shape !== 'boss') {
-        var bw = e.r * 2.2, bx2 = e.x - bw / 2, by2 = e.y - e.r - 11;
-        ctx.fillStyle = 'rgba(0,0,0,0.55)';
-        ctx.fillRect(bx2, by2, bw, 4);
-        ctx.fillStyle = d.color;
-        ctx.fillRect(bx2, by2, bw * (e.hp / e.maxHp), 4);
-      }
+      this.drawEnemyBar(ctx, e);
     }
+  };
+
+  /* 피해를 입은 적만 체력 막대를 보여 준다 (평소엔 화면이 지저분해진다).
+     보스는 화면 위쪽에 따로 큰 막대가 있으니 생략. */
+  Game.prototype.drawEnemyBar = function (ctx, e) {
+    if (e.hp >= e.maxHp || e.def.shape === 'boss') return;
+    var bw = e.r * 2.2, bx = e.x - bw / 2, by = e.y - e.r - 11;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(bx, by, bw, 4);
+    ctx.fillStyle = e.def.color;
+    ctx.fillRect(bx, by, bw * (e.hp / e.maxHp), 4);
   };
 
   Game.prototype.drawPlayer = function (ctx) {
@@ -810,6 +855,16 @@ AF.Game = (function () {
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.r + 8 + Math.sin(this.time * 9) * 2, 0, Math.PI * 2);
       ctx.stroke();
+    }
+
+    if (AF.Sprites.has('player')) {
+      var psize = p.r * 2 * (AF.SPRITES.player.scale || 2.15);
+      AF.Sprites.draw(ctx, 'player', p.x, p.y, psize, p.aim, Math.cos(p.aim) < 0);
+      ctx.restore();
+      if (p.hurtFlash > 0) {
+        AF.Sprites.flash(ctx, 'player', p.x, p.y, psize, p.hurtFlash, p.aim, Math.cos(p.aim) < 0);
+      }
+      return;
     }
 
     ctx.translate(p.x, p.y);
