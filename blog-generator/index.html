@@ -1,0 +1,517 @@
+<title>글담 블로그 생성기</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@500;700&family=Noto+Sans+KR:wght@400;500;700&display=swap">
+<style>
+/* Layout: one narrow working column, a 4-step stepper on top, each step as one panel that fills in as Claude answers. */
+:root {
+  --bg: #F3F5F9;
+  --surface: #FFFFFF;
+  --line: #E1E5EE;
+  --fg: #151A26;
+  --muted: #5F6779;
+  --accent: #1E56F0;
+  --accent-soft: #E8EEFF;
+  --main-bg: #E8EEFF; --main-fg: #1A47C9; --main-bd: #C9D6FB;
+  --sub-bg: #E6F6EC; --sub-fg: #17703C; --sub-bd: #BFE5CC;
+  --rel-bg: #FFF4DC; --rel-fg: #8A5A00; --rel-bd: #F3DDA6;
+  --tip-bg: #FFF9EA; --tip-bd: #F1E1B0;
+  --ok: #16A34A; --ok-fg: #FFFFFF;
+  --bad: #C2410C;
+  --font-display: "IBM Plex Sans KR", "Noto Sans KR", system-ui, sans-serif;
+  --font-body: "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0F131C; --surface: #171C28; --line: #2A3142; --fg: #E8ECF5; --muted: #9AA3B6;
+  --accent: #5B86FF; --accent-soft: #1D2846;
+  --main-bg: #1D2846; --main-fg: #9DB7FF; --main-bd: #33467A;
+  --sub-bg: #14291D; --sub-fg: #7FD8A2; --sub-bd: #24513A;
+  --rel-bg: #2C2412; --rel-fg: #F0C76A; --rel-bd: #574519;
+  --tip-bg: #231F12; --tip-bd: #4A4020;
+  --ok: #22A055; --ok-fg: #FFFFFF; --bad: #FB923C;
+  color-scheme: dark;
+} }
+:root[data-theme="dark"] {
+  --bg: #0F131C; --surface: #171C28; --line: #2A3142; --fg: #E8ECF5; --muted: #9AA3B6;
+  --accent: #5B86FF; --accent-soft: #1D2846;
+  --main-bg: #1D2846; --main-fg: #9DB7FF; --main-bd: #33467A;
+  --sub-bg: #14291D; --sub-fg: #7FD8A2; --sub-bd: #24513A;
+  --rel-bg: #2C2412; --rel-fg: #F0C76A; --rel-bd: #574519;
+  --tip-bg: #231F12; --tip-bd: #4A4020;
+  --ok: #22A055; --ok-fg: #FFFFFF; --bad: #FB923C;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.6; }
+.wrap { max-width: 720px; margin: 0 auto; padding-block: 32px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 20px; }
+header { text-align: center; display: grid; gap: 6px; justify-items: center; }
+.badge { font-size: 13px; font-weight: 700; color: var(--accent); background: var(--accent-soft); padding: 4px 12px; border-radius: 999px; letter-spacing: .02em; }
+h1 { font-family: var(--font-display); font-size: clamp(26px, 6vw, 34px); margin: 4px 0 0; text-wrap: balance; letter-spacing: -0.02em; }
+.lede { color: var(--muted); margin: 0; font-size: 14px; }
+
+.stepper { display: flex; align-items: center; justify-content: center; gap: 0; margin: 8px 0 4px; }
+.step { display: grid; justify-items: center; gap: 6px; width: 64px; }
+.dot { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; font-family: var(--font-display); font-weight: 700; font-size: 15px; background: var(--surface); color: var(--muted); border: 1.5px solid var(--line); transition: background .25s, color .25s, border-color .25s; }
+.step span { font-size: 12px; color: var(--muted); }
+.step.active .dot { background: var(--accent); color: #fff; border-color: var(--accent); box-shadow: 0 0 0 5px var(--accent-soft); }
+.step.done .dot { background: var(--accent); color: #fff; border-color: var(--accent); }
+.step.active span, .step.done span { color: var(--fg); font-weight: 500; }
+.bar { flex: 1; max-width: 56px; height: 2px; background: var(--line); margin-bottom: 22px; transition: background .25s; }
+.bar.on { background: var(--accent); }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 22px; display: grid; gap: 18px; min-width: 0; }
+.qlabel { display: flex; gap: 10px; align-items: center; font-weight: 700; font-family: var(--font-display); font-size: 16px; }
+.qnum { font-size: 12px; color: var(--accent); background: var(--accent-soft); padding: 2px 8px; border-radius: 6px; font-variant-numeric: tabular-nums; }
+.opt { font-size: 12px; color: var(--muted); font-weight: 400; }
+.field { display: grid; gap: 10px; }
+input[type="text"] { width: 100%; font: inherit; font-size: 16px; padding: 14px 16px; border: 1.5px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--fg); }
+input[type="text"]:focus { outline: none; border-color: var(--accent); background: var(--surface); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip-btn { font: inherit; font-size: 14px; padding: 8px 14px; border-radius: 9px; border: 1.5px solid var(--line); background: var(--surface); color: var(--fg); cursor: pointer; }
+.chip-btn[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+.chip-btn:focus-visible, button:focus-visible, .title-opt:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.primary { font: inherit; font-family: var(--font-display); font-weight: 700; font-size: 16px; width: 100%; padding: 15px; border: 0; border-radius: 11px; background: var(--accent); color: #fff; cursor: pointer; }
+.primary:disabled { opacity: .5; cursor: default; }
+.primary.ok { background: var(--ok); color: var(--ok-fg); }
+.ghost { font: inherit; font-size: 15px; padding: 14px 18px; border-radius: 11px; border: 1.5px solid var(--line); background: var(--surface); color: var(--fg); cursor: pointer; white-space: nowrap; }
+.row { display: flex; gap: 10px; }
+.row .primary { flex: 1; }
+
+.compare { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: center; }
+.compare div { border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; display: grid; gap: 2px; }
+.compare small { color: var(--muted); font-size: 12px; }
+.compare b { font-family: var(--font-display); font-size: 15px; }
+.compare .fast b { color: var(--accent); }
+.compare .vs { color: var(--muted); font-size: 12px; border: 0; padding: 0; }
+
+.loading { text-align: center; display: grid; gap: 14px; padding: 18px 0; justify-items: center; }
+.dots { display: flex; gap: 7px; }
+.dots i { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); opacity: .3; animation: blink 1.2s infinite; }
+.dots i:nth-child(2) { animation-delay: .2s; } .dots i:nth-child(3) { animation-delay: .4s; }
+@keyframes blink { 0%, 100% { opacity: .25 } 40% { opacity: 1 } }
+.loading p { margin: 0; font-weight: 500; color: var(--muted); }
+.track { width: min(100%, 420px); height: 3px; background: var(--accent-soft); border-radius: 3px; overflow: hidden; }
+.track::after { content: ""; display: block; height: 100%; width: 35%; background: var(--accent); border-radius: 3px; animation: slide 1.6s ease-in-out infinite; }
+@keyframes slide { 0% { transform: translateX(-100%) } 100% { transform: translateX(300%) } }
+@media (prefers-reduced-motion: reduce) { .dots i, .track::after { animation: none; opacity: 1; } }
+
+.result-head { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: start; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+.result-head .ic { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+.result-head h2 { margin: 0; font-family: var(--font-display); font-size: 18px; }
+.result-head p { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
+.sec-label { font-size: 12px; font-weight: 700; color: var(--muted); letter-spacing: .04em; margin-bottom: 8px; }
+.kw { display: inline-block; font-weight: 700; font-size: 14px; padding: 7px 13px; border-radius: 9px; border: 1px solid; }
+.kw.main { font-size: 20px; padding: 12px 18px; font-family: var(--font-display); background: var(--main-bg); color: var(--main-fg); border-color: var(--main-bd); }
+.kw.sub { background: var(--sub-bg); color: var(--sub-fg); border-color: var(--sub-bd); }
+.kw.rel { background: var(--rel-bg); color: var(--rel-fg); border-color: var(--rel-bd); }
+
+.titles { display: grid; gap: 8px; }
+.title-opt { display: flex; gap: 12px; align-items: center; padding: 14px 16px; border: 1.5px solid var(--line); border-radius: 11px; cursor: pointer; font-weight: 500; }
+.title-opt:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.title-opt input { accent-color: var(--accent); width: 18px; height: 18px; flex: none; margin: 0; }
+
+.headline { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 14px 18px; border-radius: 0 10px 10px 0; font-family: var(--font-display); font-weight: 700; font-size: 18px; text-wrap: balance; }
+.sections { display: grid; gap: 10px; }
+.h2card { border: 1px solid var(--line); border-radius: 11px; padding: 14px 16px; display: grid; gap: 8px; }
+.h2card .h { display: flex; gap: 10px; align-items: baseline; font-weight: 700; }
+.h2tag { font-size: 11px; font-weight: 700; color: var(--accent); background: var(--accent-soft); padding: 1px 6px; border-radius: 5px; flex: none; }
+.h2card ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: 14px; }
+.h2card .foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.h2card .foot .kws { display: flex; flex-wrap: wrap; gap: 6px; }
+.h2card .foot .kws span { font-size: 12px; font-weight: 700; color: var(--main-fg); background: var(--main-bg); padding: 3px 8px; border-radius: 6px; }
+.h2card .foot small { color: var(--muted); font-variant-numeric: tabular-nums; }
+.tips { background: var(--tip-bg); border: 1px solid var(--tip-bd); border-radius: 11px; padding: 14px 18px; }
+.tips b { font-family: var(--font-display); }
+.tips ul { margin: 8px 0 0; padding-left: 18px; font-size: 14px; display: grid; gap: 4px; }
+
+.post { border: 1px solid var(--line); border-radius: 11px; padding: 20px; max-height: 520px; overflow-y: auto; min-width: 0; overflow-wrap: anywhere; }
+.post h3 { font-family: var(--font-display); font-size: 18px; margin: 22px 0 8px; }
+.post h3:first-child { margin-top: 0; }
+.post p { margin: 0 0 12px; max-width: 65ch; }
+.post .caret { display: inline-block; width: 2px; height: 1em; background: var(--accent); vertical-align: text-bottom; animation: blink 1s infinite; }
+.title-card { border: 1px solid var(--line); border-radius: 11px; padding: 14px 18px; background: var(--accent-soft); }
+.title-card small { color: var(--accent); font-weight: 700; font-size: 12px; }
+.title-card div { font-family: var(--font-display); font-weight: 700; font-size: 19px; text-wrap: balance; }
+
+.check { display: grid; }
+.check .r { display: grid; grid-template-columns: 44px 1fr auto; gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.check .r:last-child { border-bottom: 0; }
+.check .t { font-size: 11px; color: var(--muted); background: var(--bg); border-radius: 5px; text-align: center; padding: 2px 0; }
+.check .yes { color: var(--ok); font-weight: 700; font-variant-numeric: tabular-nums; }
+.check .no { color: var(--bad); font-weight: 700; }
+
+.notice { border: 1px solid var(--line); border-radius: 11px; padding: 12px 16px; font-size: 14px; color: var(--muted); background: var(--bg); }
+.notice.err { border-color: var(--bad); color: var(--bad); }
+.foot-note { text-align: center; font-size: 12px; color: var(--muted); }
+
+@media (max-width: 480px) {
+  .panel { padding: 18px 16px; }
+  .compare { grid-template-columns: 1fr; }
+  .compare .vs { display: none; }
+  .step { width: 54px; }
+  .row { flex-direction: column; }
+}
+</style>
+
+<div class="wrap">
+  <header>
+    <span class="badge">글담 AI</span>
+    <h1>블로그 글 자동 생성기</h1>
+    <p class="lede">황금 키워드 → SEO 구조 → 상위 노출 본문, 5분이면 끝</p>
+  </header>
+
+  <nav class="stepper" aria-label="진행 단계">
+    <div class="step active" data-s="1"><div class="dot">1</div><span>키워드</span></div>
+    <div class="bar" data-b="1"></div>
+    <div class="step" data-s="2"><div class="dot">2</div><span>구조</span></div>
+    <div class="bar" data-b="2"></div>
+    <div class="step" data-s="3"><div class="dot">3</div><span>본문</span></div>
+    <div class="bar" data-b="3"></div>
+    <div class="step" data-s="4"><div class="dot">4</div><span>완료</span></div>
+  </nav>
+
+  <main id="app" class="panel"></main>
+  <p class="foot-note">AI가 쓴 초안입니다. 수치·사례는 발행 전에 직접 확인해 주세요.</p>
+</div>
+
+<script>
+(() => {
+  const PURPOSES = ["정보 전달", "후기·리뷰", "비교·추천", "노하우·꿀팁", "문제 해결"];
+  const state = {
+    topic: "스레드 조회수 10만 만드는 방법",
+    purpose: "노하우·꿀팁",
+    kw: null, titleIdx: 0, outline: null, body: "", step: 1,
+  };
+  let sample;          // undefined = still connecting, null = unavailable
+  let ctl = null;
+  const app = document.getElementById("app");
+
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const arr = (v, n) => (Array.isArray(v) ? v : []).map(x => String(x ?? "").trim()).filter(Boolean).slice(0, n);
+  const ICON = {
+    search: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+    struct: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 5h16M4 12h10M4 19h13"/></svg>',
+    pen: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16v4Z"/></svg>',
+  };
+
+  function setStep(n, doneUpTo) {
+    state.step = n;
+    document.querySelectorAll(".step").forEach(el => {
+      const s = +el.dataset.s;
+      el.classList.toggle("done", s <= doneUpTo);
+      el.classList.toggle("active", s === n && s > doneUpTo);
+      el.querySelector(".dot").textContent = s <= doneUpTo ? "✓" : s;
+    });
+    document.querySelectorAll(".bar").forEach(b => b.classList.toggle("on", +b.dataset.b <= doneUpTo));
+  }
+
+  function errCopy(e) {
+    switch (e?.code) {
+      case "not_granted": case "sampling_disabled": case "not_declared": case "capability_disabled":
+        return "Claude 사용이 허용되지 않았습니다. 이 페이지의 권한 메뉴에서 Claude 사용을 허용한 뒤 새로고침해 주세요.";
+      case "rate_limited": return "요청이 많아 잠시 막혔습니다. 1~2분 뒤에 다시 눌러 주세요.";
+      case "session_expired": return "로그인이 만료되었습니다. claude.ai에 다시 로그인해 주세요.";
+      case "refused": return "이 주제로는 글을 만들 수 없었습니다. 주제를 바꿔서 다시 시도해 주세요.";
+      case "invalid_json": case "empty_completion": return "AI 응답을 읽지 못했습니다. 다시 시도해 주세요.";
+      default: return "연결이 잠시 끊겼습니다. 다시 시도해 주세요.";
+    }
+  }
+  function unavailableNote() {
+    if (sample === null) return '<div class="notice">AI 기능은 claude.ai에서 이 페이지를 열었을 때 작동합니다. 로그인 후 다시 열어 주세요.</div>';
+    if (sample === undefined) return '<div class="notice">AI에 연결하는 중입니다…</div>';
+    return "";
+  }
+
+  function loadingView(msg) {
+    app.innerHTML = `<div class="loading"><div class="dots"><i></i><i></i><i></i></div><p>${esc(msg)}</p><div class="track"></div><button class="ghost" id="stop">중지</button></div>`;
+    document.getElementById("stop").onclick = () => ctl?.abort();
+  }
+
+  /* ---------- Step 1: input ---------- */
+  function renderInput(error) {
+    setStep(1, 0);
+    app.innerHTML = `
+      <div class="field">
+        <label class="qlabel" for="topic"><span class="qnum">01</span>어떤 주제로 글을 쓸까요?</label>
+        <input type="text" id="topic" value="${esc(state.topic)}" placeholder="예: 제주도 3박 4일 가족 여행 코스" autocomplete="off">
+      </div>
+      <div class="field">
+        <div class="qlabel"><span class="qnum">02</span>글의 목적·분위기 <span class="opt">(선택)</span></div>
+        <div class="chips" role="group" aria-label="글의 목적">
+          ${PURPOSES.map(p => `<button type="button" class="chip-btn" aria-pressed="${p === state.purpose}" data-p="${esc(p)}">${esc(p)}</button>`).join("")}
+        </div>
+      </div>
+      ${error ? `<div class="notice err">${esc(error)}</div>` : unavailableNote()}
+      <button class="primary" id="go" ${sample ? "" : "disabled"}>황금 키워드 찾기</button>
+      <div class="compare">
+        <div><small>직접 작성</small><b>키워드 조사부터 3시간</b></div>
+        <div class="vs">VS</div>
+        <div class="fast"><small>AI 생성</small><b>주제 한 줄 → 5분</b></div>
+      </div>`;
+    const topic = document.getElementById("topic");
+    topic.oninput = () => { state.topic = topic.value; };
+    topic.onkeydown = e => { if (e.key === "Enter" && !e.isComposing) findKeywords(); };
+    app.querySelectorAll(".chip-btn").forEach(b => b.onclick = () => {
+      state.purpose = state.purpose === b.dataset.p ? "" : b.dataset.p;
+      app.querySelectorAll(".chip-btn").forEach(x => x.setAttribute("aria-pressed", x.dataset.p === state.purpose));
+    });
+    document.getElementById("go").onclick = findKeywords;
+  }
+
+  async function findKeywords() {
+    const topic = state.topic.trim();
+    if (!topic) { document.getElementById("topic")?.focus(); return; }
+    if (!sample) return;
+    ctl = new AbortController();
+    setStep(1, 0);
+    loadingView("AI가 황금 키워드를 찾고 있습니다...");
+    const prompt = `당신은 네이버 블로그 상위 노출(SEO) 전문가입니다.
+블로그 주제: "${topic}"
+글의 목적: ${state.purpose || "자유"}
+
+네이버 검색 사용자의 검색 의도를 분석하고, 이 주제로 상위 노출을 노릴 키워드를 뽑아 주세요.
+- main: 검색량이 많고 주제를 대표하는 메인 키워드 1개 (실제 사람들이 검색창에 칠 법한 형태, 2~5어절)
+- sub: 메인을 보조하는 롱테일 서브 키워드 5개 (각 H2 소제목에 하나씩 쓸 수 있는 것)
+- related: 본문에 자연스럽게 녹일 연관 키워드 5개
+- intent: 검색 의도를 한두 문장으로 ("AI가 분석한 검색 의도:" 같은 머리말 없이)
+- titles: 메인 키워드를 앞쪽에 넣은 클릭하고 싶은 블로그 제목 후보 4개 (각 40자 안팎)
+
+JSON 객체 하나만 답하세요. 형식:
+{"intent":"...","main":"...","sub":["..."],"related":["..."],"titles":["..."]}`;
+    try {
+      const r = await sample.json(prompt, { signal: ctl.signal });
+      const kw = {
+        intent: String(r?.intent ?? "").trim(),
+        main: String(r?.main ?? "").trim() || topic,
+        sub: arr(r?.sub, 5), related: arr(r?.related, 5), titles: arr(r?.titles, 4),
+      };
+      if (!kw.titles.length) kw.titles = [topic];
+      state.kw = kw; state.titleIdx = 0; state.outline = null; state.body = "";
+      renderKeywords();
+    } catch (e) {
+      renderInput(e?.code === "cancelled" ? "" : errCopy(e));
+    }
+  }
+
+  /* ---------- Step 1 result ---------- */
+  function renderKeywords(error) {
+    setStep(2, 1);
+    const k = state.kw;
+    app.innerHTML = `
+      <div class="result-head"><div class="ic">${ICON.search}</div><div>
+        <h2>황금 키워드 추출 완료</h2>
+        <p>AI가 분석한 검색 의도: ${esc(k.intent)}</p></div></div>
+      <div><div class="sec-label">메인 키워드</div><span class="kw main">${esc(k.main)}</span></div>
+      <div><div class="sec-label">서브 키워드</div><div class="chips">${k.sub.map(s => `<span class="kw sub">${esc(s)}</span>`).join("")}</div></div>
+      <div><div class="sec-label">연관 키워드</div><div class="chips">${k.related.map(s => `<span class="kw rel">${esc(s)}</span>`).join("")}</div></div>
+      <div><div class="sec-label">제목 후보 (하나를 선택하세요)</div>
+        <div class="titles" role="radiogroup">${k.titles.map((t, i) => `
+          <label class="title-opt"><input type="radio" name="title" id="title-${i}" value="${i}" ${i === state.titleIdx ? "checked" : ""}><span>${esc(t)}</span></label>`).join("")}
+        </div></div>
+      ${error ? `<div class="notice err">${esc(error)}</div>` : ""}
+      <div class="row">
+        <button class="ghost" id="back">주제 다시 입력</button>
+        <button class="primary" id="go">글 구조 설계하기</button>
+      </div>`;
+    app.querySelectorAll('input[name="title"]').forEach(r => r.onchange = () => { state.titleIdx = +r.value; });
+    document.getElementById("back").onclick = () => renderInput();
+    document.getElementById("go").onclick = designOutline;
+  }
+
+  async function designOutline() {
+    ctl = new AbortController();
+    const k = state.kw, title = k.titles[state.titleIdx];
+    loadingView("AI가 SEO 구조를 설계하고 있습니다...");
+    const prompt = `당신은 네이버 블로그 상위 노출(SEO) 전문가입니다. 아래 정보로 블로그 글의 구조를 설계하세요.
+제목: ${title}
+글의 목적: ${state.purpose || "자유"}
+메인 키워드: ${k.main}
+서브 키워드: ${k.sub.join(", ")}
+연관 키워드: ${k.related.join(", ")}
+
+규칙:
+- H2 소제목 5~6개. 첫 소제목은 도입(이 글에서 얻을 것), 마지막은 요약·실천 체크리스트.
+- 각 H2마다 다룰 내용 3개(points), 그 섹션에 배치할 키워드 1~2개(keywords, 위 키워드 중에서), 예상 글자 수(chars, 숫자).
+- 서브 키워드는 소제목마다 하나씩 분산 배치.
+- tips: 이 글에 맞춘 구체적인 SEO 팁 4~5개.
+- estimatedChars: 전체 예상 글자 수(숫자, 2000~3500).
+
+JSON 객체 하나만 답하세요. 형식:
+{"estimatedChars":2500,"sections":[{"h2":"...","points":["...","...","..."],"keywords":["..."],"chars":300}],"tips":["..."]}`;
+    try {
+      const r = await sample.json(prompt, { signal: ctl.signal });
+      const sections = (Array.isArray(r?.sections) ? r.sections : []).slice(0, 7).map(s => ({
+        h2: String(s?.h2 ?? "").trim(), points: arr(s?.points, 4), keywords: arr(s?.keywords, 3), chars: Number(s?.chars) || 0,
+      })).filter(s => s.h2);
+      if (!sections.length) throw { code: "invalid_json" };
+      state.outline = { title, sections, tips: arr(r?.tips, 6), estimatedChars: Number(r?.estimatedChars) || sections.reduce((a, s) => a + s.chars, 0) };
+      state.body = "";
+      renderOutline();
+    } catch (e) {
+      renderKeywords(e?.code === "cancelled" ? "" : errCopy(e));
+    }
+  }
+
+  /* ---------- Step 2 result ---------- */
+  function renderOutline(error) {
+    setStep(3, 2);
+    const o = state.outline;
+    app.innerHTML = `
+      <div class="result-head"><div class="ic">${ICON.struct}</div><div>
+        <h2>SEO 구조 설계 완료</h2>
+        <p>예상 분량: 약 ${o.estimatedChars.toLocaleString("ko-KR")}자</p></div></div>
+      <div class="headline">${esc(o.title)}</div>
+      <div class="sections">${o.sections.map(s => `
+        <div class="h2card">
+          <div class="h"><span class="h2tag">H2</span><span>${esc(s.h2)}</span></div>
+          <ul>${s.points.map(p => `<li>${esc(p)}</li>`).join("")}</ul>
+          <div class="foot"><div class="kws">${s.keywords.map(x => `<span>${esc(x)}</span>`).join("")}</div>${s.chars ? `<small>약 ${s.chars}자</small>` : ""}</div>
+        </div>`).join("")}
+      </div>
+      ${o.tips.length ? `<div class="tips"><b>SEO 팁</b><ul>${o.tips.map(t => `<li>${esc(t)}</li>`).join("")}</ul></div>` : ""}
+      ${error ? `<div class="notice err">${esc(error)}</div>` : ""}
+      <div class="row">
+        <button class="ghost" id="back">키워드로 돌아가기</button>
+        <button class="primary" id="go">본문 자동 작성하기</button>
+      </div>`;
+    document.getElementById("back").onclick = () => renderKeywords();
+    document.getElementById("go").onclick = () => writeBody(false);
+  }
+
+  /* ---------- Step 3: stream the body ---------- */
+  function bodyHtml(text, streaming) {
+    const lines = text.replace(/\r/g, "").split("\n");
+    let html = "", para = [];
+    const flush = () => { if (para.length) { html += `<p>${para.map(esc).join("<br>")}</p>`; para = []; } };
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (/^#{1,3}\s+/.test(line)) { flush(); html += `<h3>${esc(line.replace(/^#{1,3}\s+/, ""))}</h3>`; }
+      else if (!line) flush();
+      else para.push(line);
+    }
+    flush();
+    if (streaming) html += '<span class="caret"></span>';
+    return html;
+  }
+  const plainBody = t => t.replace(/\r/g, "").split("\n").map(l => l.replace(/^\s*#{1,3}\s+/, "")).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+
+  async function writeBody(fresh) {
+    ctl = new AbortController();
+    const k = state.kw, o = state.outline;
+    setStep(3, 2);
+    app.innerHTML = `
+      <div class="result-head"><div class="ic">${ICON.pen}</div><div>
+        <h2>본문을 쓰고 있습니다</h2><p id="live-count">AI가 구조를 읽는 중…</p></div></div>
+      <div class="title-card"><small>블로그 제목</small><div>${esc(o.title)}</div></div>
+      <div class="post" id="post"><div class="loading"><div class="dots"><i></i><i></i><i></i></div><p>AI가 본문을 작성하고 있습니다...</p></div></div>
+      <button class="ghost" id="stop">중지</button>`;
+    const post = document.getElementById("post"), count = document.getElementById("live-count");
+    document.getElementById("stop").onclick = () => ctl?.abort();
+    const outline = o.sections.map((s, i) => `${i + 1}. ${s.h2} (약 ${s.chars || 400}자)\n   - ${s.points.join("\n   - ")}\n   - 배치 키워드: ${s.keywords.join(", ")}`).join("\n");
+    const prompt = `당신은 네이버 블로그 상위 노출 글을 쓰는 인기 블로거입니다. 아래 설계대로 블로그 본문을 써 주세요.
+
+제목: ${o.title}
+글의 목적: ${state.purpose || "자유"}
+메인 키워드: ${k.main}
+서브 키워드: ${k.sub.join(", ")}
+연관 키워드: ${k.related.join(", ")}
+
+구조:
+${outline}
+
+작성 규칙:
+- 분량 약 ${Math.max(2000, o.estimatedChars)}자 이상, 한국어 구어체 존댓말(~해요, ~거든요)로 친근하게.
+- 첫 문단 안에 메인 키워드 "${k.main}"를 자연스럽게 넣고, 본문 전체에 메인 키워드 4~6회.
+- 모든 서브 키워드를 최소 1회씩 정확히 같은 표현으로 포함. 연관 키워드도 자연스럽게 포함.
+- 각 소제목은 줄 맨 앞에 "## "를 붙여 한 줄로 쓰기. 그 외 마크다운(굵게, 목록 기호 *, 표)은 쓰지 말 것. 목록이 필요하면 "1." "2."나 "✔"로.
+- 문단은 2~3문장으로 짧게, 문단 사이에 빈 줄. 모바일에서 읽기 쉽게.
+- 마지막은 요약과 댓글 참여를 유도하는 질문으로 마무리.
+- 확인되지 않은 통계·수치를 사실처럼 단정하지 말 것.
+- 제목은 다시 쓰지 말고 본문만 출력.`;
+    let text = "";
+    try {
+      const r = await sample(prompt, {
+        signal: ctl.signal, cache: fresh ? false : true,
+        onText: ({ text: t }) => {
+          text = t;
+          post.innerHTML = bodyHtml(t, true);
+          post.scrollTop = post.scrollHeight;
+          count.textContent = `${plainBody(t).length.toLocaleString("ko-KR")}자 작성됨`;
+        },
+      });
+      state.body = r.text;
+      state.truncated = r.truncated;
+      renderDone();
+    } catch (e) {
+      const partial = e?.text || text;
+      if (partial && e?.code !== "refused") { state.body = partial; state.truncated = true; renderDone(e?.code === "cancelled" ? "작성을 중지했습니다. 여기까지 쓴 내용입니다." : errCopy(e) + " 여기까지 쓴 내용입니다."); }
+      else renderOutline(e?.code === "cancelled" ? "" : errCopy(e));
+    }
+  }
+
+  /* ---------- Step 4: done ---------- */
+  function countIn(hay, kw) {
+    const h = hay.replace(/\s+/g, ""), n = kw.replace(/\s+/g, "");
+    if (!n) return 0;
+    let c = 0, i = 0;
+    while ((i = h.indexOf(n, i)) !== -1) { c++; i += n.length; }
+    return c;
+  }
+
+  function renderDone(note) {
+    setStep(4, 4);
+    const k = state.kw, o = state.outline, plain = plainBody(state.body);
+    const full = o.title + "\n\n" + plain;
+    const rows = [["메인", k.main], ...k.sub.map(s => ["서브", s]), ...k.related.map(s => ["연관", s])];
+    app.innerHTML = `
+      <div class="result-head"><div class="ic">${ICON.pen}</div><div>
+        <h2>블로그 글 작성 완료!</h2>
+        <p>${plain.length.toLocaleString("ko-KR")}자 · 소제목 ${(state.body.match(/^\s*#{1,3}\s+/gm) || []).length}개</p></div></div>
+      ${note ? `<div class="notice">${esc(note)}</div>` : state.truncated ? '<div class="notice">글이 길어 끝부분이 잘렸을 수 있습니다. 마지막 문단을 확인해 주세요.</div>' : ""}
+      <div class="title-card"><small>블로그 제목</small><div>${esc(o.title)}</div></div>
+      <div class="post" id="post">${bodyHtml(state.body, false)}</div>
+      <div class="row">
+        <button class="primary" id="copy">전체 복사</button>
+        <button class="ghost" id="again">다시 쓰기</button>
+        <button class="ghost" id="new">새 글 쓰기</button>
+      </div>
+      <div>
+        <div class="sec-label">키워드 포함 확인</div>
+        <div class="check">${rows.map(([t, w]) => {
+          const n = countIn(full, w);
+          return `<div class="r"><span class="t">${t}</span><span>${esc(w)}</span>${n ? `<span class="yes">포함됨 ✓ ${n}회</span>` : '<span class="no">누락</span>'}</div>`;
+        }).join("")}</div>
+      </div>`;
+    const copy = document.getElementById("copy");
+    copy.onclick = () => {
+      const done = () => { copy.textContent = "✓ 복사 완료!"; copy.classList.add("ok"); setTimeout(() => { copy.textContent = "전체 복사"; copy.classList.remove("ok"); }, 2200); };
+      const fallback = () => {
+        const ta = document.createElement("textarea");
+        ta.value = full; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.select();
+        let ok = false; try { ok = document.execCommand("copy"); } catch {}
+        ta.remove();
+        if (ok) done(); else {
+          const range = document.createRange(); range.selectNodeContents(document.getElementById("post"));
+          const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
+          copy.textContent = "본문을 선택했어요. 길게 눌러 복사하세요";
+        }
+      };
+      try { navigator.clipboard.writeText(full).then(done, fallback); } catch { fallback(); }
+    };
+    document.getElementById("again").onclick = () => writeBody(true);
+    document.getElementById("new").onclick = () => { state.kw = state.outline = null; state.body = ""; renderInput(); };
+  }
+
+  renderInput();
+  if (window.claude?.use) {
+    window.claude.use("sample").then(s => { sample = s; }, () => { sample = null; })
+      .finally(() => { if (state.step === 1 && !state.kw) renderInput(); });
+  } else {
+    sample = null;
+    renderInput();
+  }
+})();
+</script>
